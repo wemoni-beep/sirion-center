@@ -707,16 +707,24 @@ export default function App() {
       };
       await db.saveWithId("m2_scan_meta", scanId, completeMeta);
 
-      // 5. Update local state
+      // 5. Auto-build export payload for M3 (no manual export needed)
+      const payload = buildExportPayload(result);
+
+      // 6. Update local state + pipeline (with full exportPayload for M3)
       setScanData(result);
       setScanHistory(prev => [result, ...prev].slice(0, 20));
       updateModule("m2", {
         scanResults: result,
         scores: result.scores,
         scannedAt: result.date,
+        contentGaps: payload.allContentGaps,
+        personaBreakdown: payload.personaBreakdown,
+        stageBreakdown: payload.stageBreakdown,
+        recommendations: payload.allRecommendations,
+        exportPayload: payload,
       });
 
-      // 6. Show save warnings if any
+      // 7. Show save warnings if any
       if (saveErrors.length > 0) {
         setScanError(`Scan complete. ${saveErrors.length} of ${result.results.length} results had save issues (data may be in local cache).`);
       }
@@ -1805,19 +1813,17 @@ export default function App() {
                 {importStatus && <div style={{ marginTop: 8, fontSize: 11, color: importStatus.type === "success" ? T.green : T.red, fontWeight: 600 }}>{importStatus.type === "success" ? "\u2713" : "\u2717"} {importStatus.msg}</div>}
               </Card>
 
-              {/* M2→M3 Export */}
-              <Card glow={T.purple} style={{ borderLeft: "3px solid " + T.purple }}>
-                <Label>EXPORT TO AUTHORITY RING {"\u2014"} M2{"\u2192"}M3</Label>
-                <div style={{ fontSize: 11, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Export scan results and content gaps to Authority Ring for domain prioritization.</div>
+              {/* M2→M3 Auto-Sync Status */}
+              <Card glow={T.purple} style={{ borderLeft: "3px solid " + (scanData ? T.green : T.purple) }}>
+                <Label>AUTHORITY RING SYNC {"\u2014"} M2{"\u2192"}M3 (AUTO)</Label>
+                <div style={{ fontSize: 11, color: T.muted, marginBottom: 12, lineHeight: 1.5 }}>Scan results automatically flow to the Authority Ring for domain prioritization. No manual export needed.</div>
                 {scanData ? (
-                  <Btn primary onClick={() => {
-                    const payload = buildExportPayload(scanData);
-                    updateModule("m2", { scanResults: scanData, scores: scanData.scores, contentGaps: payload.allContentGaps, personaBreakdown: payload.personaBreakdown, stageBreakdown: payload.stageBreakdown, recommendations: payload.allRecommendations, exportPayload: payload, scannedAt: scanData.date });
-                    setExportCopied(true); setTimeout(() => setExportCopied(false), 3000);
-                    try { navigator.clipboard.writeText(JSON.stringify(payload, null, 2)); } catch {}
-                  }}>{exportCopied ? "\u2713 Sent to M3" : "Export to Authority Ring"}</Btn>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: T.green, boxShadow: `0 0 8px ${T.green}50` }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: T.green, fontFamily: T.fontM }}>SYNCED — {scanData.results?.length || 0} results flowing to M3</span>
+                  </div>
                 ) : (
-                  <div style={{ fontSize: 11, color: T.dim, padding: "14px", textAlign: "center", background: T.surface, borderRadius: 8 }}>Run a scan first to generate exportable data</div>
+                  <div style={{ fontSize: 11, color: T.dim, padding: "14px", textAlign: "center", background: T.surface, borderRadius: 8 }}>Run a scan first — data will auto-sync to Authority Ring</div>
                 )}
               </Card>
             </div>

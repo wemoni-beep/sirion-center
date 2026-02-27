@@ -1,8 +1,10 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { FONT } from "./typography";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, PieChart, Pie, Cell, Treemap } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, PieChart, Pie, Cell, Treemap, CartesianGrid } from "recharts";
 import { useTheme } from "./ThemeContext";
 import { usePipeline } from "./PipelineContext";
+import { buildExportPayload } from "./scanEngine";
+import { db } from "./firebase";
 
 /* ═══════════════════════════════════════════════════════
    AUTHORITY RING — Module 2 of Xtrusio Platform
@@ -225,58 +227,139 @@ export default function AuthorityRing() {
   const [sortBy, setSortBy] = useState("priorityScore");
   const [view, setView] = useState("list");
 
-  // ═══ M2→M3 BRIDGE: Perception data import ═══
+  // ═══ M2→M3 BRIDGE: Auto-load perception data ═══
   const [perceptionData, setPerceptionData] = useState(null);
   const [perceptionImportText, setPerceptionImportText] = useState("");
   const [perceptionStatus, setPerceptionStatus] = useState(null);
   const [pipelineM2Loaded, setPipelineM2Loaded] = useState(false);
+  const [aiCitedDomains, setAiCitedDomains] = useState([]);
 
-  // Auto-load M2 perception data from pipeline
+  // Auto-load M2 perception data from pipeline (exportPayload OR fallback to scanResults)
   useEffect(() => {
-    if (pipeline.m2.exportPayload && !pipelineM2Loaded) {
+    if (pipelineM2Loaded) return;
+
+    // Priority 1: exportPayload already built by M2
+    if (pipeline.m2.exportPayload) {
       setPerceptionData(pipeline.m2.exportPayload);
       setPipelineM2Loaded(true);
-      setPerceptionStatus({ type: "success", msg: `Pipeline: Auto-loaded perception data from M2 (${pipeline.m2.scores?.overall || 0}/100 overall score).` });
+      setPerceptionStatus({ type: "success", msg: `Auto-loaded perception data from M2 (${pipeline.m2.scores?.overall || 0}/100 overall score).` });
+      return;
     }
-  }, [pipeline.m2.exportPayload, pipelineM2Loaded]);
 
-  // Compute enhanced priority scores when perception data is available
-  const enhancedDomains = useMemo(() => {
-    if (!perceptionData) return DOMAINS;
-    return DOMAINS.map(d => {
-      let boost = 0;
-      const matchingGaps = [];
+    // Priority 2: Fallback — construct perception data from raw scanResults
+    const rawSR = pipeline.m2.scanResults;
+    const srResults = rawSR?.results;
+    // Normalize: Firebase may store arrays as objects with numeric keys
+    const srArr = Array.isArray(srResults) ? srResults : (srResults && typeof srResults === "object" ? Object.values(srResults) : []);
+    if (srArr.length > 0) {
+      try {
+        // Normalize the scanResults before passing to buildExportPayload
+        const normalizedSR = {
+          ...rawSR,
+          results: srArr,
+          llms: Array.isArray(rawSR.llms) ? rawSR.llms : (rawSR.llms && typeof rawSR.llms === "object" ? Object.values(rawSR.llms) : []),
+        };
+        const payload = buildExportPayload(normalizedSR);
+        setPerceptionData(payload);
+        setPipelineM2Loaded(true);
+        // Also save the constructed payload back to pipeline so M3 doesn't rebuild next time
+        updateModule("m2", { exportPayload: payload });
+        setPerceptionStatus({ type: "success", msg: `Auto-constructed perception data from ${srArr.length} scan results (${pipeline.m2.scores?.overall || 0}/100).` });
+      } catch (e) {
+        console.warn("[M3] Failed to build perception data from scanResults:", e);
+      }
+    }
+  }, [pipeline.m2.exportPayload, pipeline.m2.scanResults, pipelineM2Loaded]);
 
-      // Check which weak personas this domain serves
-      const weakPersonas = perceptionData.personaBreakdown
-        ?.filter(p => p.mentionRate < 70)
-        .map(p => p.persona) || [];
-      const personaOverlap = (d.buyerPersonas || []).filter(p => weakPersonas.includes(p));
-      boost += personaOverlap.length * 3;
+  // Cross-reference AI-cited domains with Authority Ring domain list
+  useEffect(() => {
+    const scanResults = pipeline.m2.scanResults;
+    // Normalize results: Firebase may store arrays as objects with numeric keys
+    const rawResults = scanResults?.results;
+    const resultsArr = Array.isArray(rawResults) ? rawResults : (rawResults && typeof rawResults === "object" ? Object.values(rawResults) : []);
+    const llmsArr = Array.isArray(scanResults?.llms) ? scanResults.llms : (scanResults?.llms && typeof scanResults.llms === "object" ? Object.values(scanResults.llms) : []);
+    if (!resultsArr.length) { setAiCitedDomains([]); return; }
 
-      // Check which weak stages this domain covers
-      const weakStages = perceptionData.stageBreakdown
-        ?.filter(s => s.mentionRate < 70)
-        .map(s => s.stage.toLowerCase()) || [];
-      const stageOverlap = (d.buyingStages || []).filter(s => weakStages.includes(s));
-      boost += stageOverlap.length * 2;
+    const domainMap = {};
+    const domainLookup = {};
+    DOMAINS.forEach(d => {
+      // Normalize domain for matching: "hbr.org" → "hbr.org", handle www prefix
+      domainLookup[d.domain.toLowerCase()] = d;
+      // Also index without TLD for fuzzy match: "hbr.org" → "hbr"
+      const base = d.domain.toLowerCase().replace(/\.(com|org|net|io|co|ai)$/, "");
+      domainLookup[base] = d;
+    });
 
-      // Match domain topics to content gaps
-      (perceptionData.allContentGaps || []).forEach(gap => {
-        const gapLower = gap.toLowerCase();
-        (d.topicsFit || []).forEach(topic => {
-          if (gapLower.includes(topic.toLowerCase()) || topic.toLowerCase().split(" ").some(w => w.length > 4 && gapLower.includes(w))) {
-            matchingGaps.push(gap);
-            boost += 2;
+    resultsArr.forEach(r => {
+      llmsArr.forEach(lid => {
+        const a = r.analyses?.[lid];
+        if (!a || a._error) return;
+        (a.cited_sources || []).forEach(src => {
+          const raw = (src.domain || "").toLowerCase().replace(/^www\./, "");
+          if (!raw) return;
+          // Try exact match first, then base domain match
+          const matched = domainLookup[raw] || domainLookup[raw.replace(/\.(com|org|net|io|co|ai)$/, "")];
+          if (matched) {
+            const key = matched.id;
+            if (!domainMap[key]) domainMap[key] = { domainId: key, domain: matched.domain, citationCount: 0, llms: new Set(), queries: new Set(), contexts: [] };
+            domainMap[key].citationCount++;
+            domainMap[key].llms.add(lid);
+            domainMap[key].queries.add(r.qid);
+            if (src.context && domainMap[key].contexts.length < 5) domainMap[key].contexts.push(src.context);
           }
         });
       });
+    });
 
-      // Extra boost if domain serves the weakest persona
-      if (perceptionData.personaBreakdown?.length > 0) {
-        const weakest = perceptionData.personaBreakdown.reduce((a, b) => a.mentionRate < b.mentionRate ? a : b);
-        if ((d.buyerPersonas || []).includes(weakest.persona)) boost += 5;
+    const cited = Object.values(domainMap)
+      .map(d => ({ ...d, llms: [...d.llms], queries: [...d.queries], queryCount: d.queries.size || d.queries.length }))
+      .sort((a, b) => b.citationCount - a.citationCount);
+    setAiCitedDomains(cited);
+  }, [pipeline.m2.scanResults]);
+
+  // Compute enhanced priority scores when perception data is available
+  const enhancedDomains = useMemo(() => {
+    if (!perceptionData && aiCitedDomains.length === 0) return DOMAINS;
+
+    // Pre-compute weak personas and stages once (outside the map)
+    const weakPersonas = perceptionData?.personaBreakdown?.filter(p => p.mentionRate < 70).map(p => p.persona) || [];
+    const weakStages = perceptionData?.stageBreakdown?.filter(s => s.mentionRate < 70).map(s => s.stage.toLowerCase()) || [];
+    const weakest = perceptionData?.personaBreakdown?.length > 0 ? perceptionData.personaBreakdown.reduce((a, b) => a.mentionRate < b.mentionRate ? a : b) : null;
+
+    return DOMAINS.map(d => {
+      let boost = 0;
+      const matchingGaps = [];
+      let personaOverlap = [];
+      let stageOverlap = [];
+
+      if (perceptionData) {
+        personaOverlap = (d.buyerPersonas || []).filter(p => weakPersonas.includes(p));
+        boost += personaOverlap.length * 3;
+
+        stageOverlap = (d.buyingStages || []).filter(s => weakStages.includes(s));
+        boost += stageOverlap.length * 2;
+
+        // Match domain topics to content gaps
+        (perceptionData.allContentGaps || []).forEach(gap => {
+          const gapLower = gap.toLowerCase();
+          (d.topicsFit || []).forEach(topic => {
+            if (gapLower.includes(topic.toLowerCase()) || topic.toLowerCase().split(" ").some(w => w.length > 4 && gapLower.includes(w))) {
+              matchingGaps.push(gap);
+              boost += 2;
+            }
+          });
+        });
+
+        // Extra boost if domain serves the weakest persona
+        if (weakest && (d.buyerPersonas || []).includes(weakest.persona)) boost += 5;
       }
+
+      // AI Citation cross-reference: boost domains that AI already cites
+      const citedEntry = aiCitedDomains.find(c => c.domainId === d.id);
+      const aiCitations = citedEntry ? citedEntry.citationCount : 0;
+      const aiCitedByLLMs = citedEntry ? citedEntry.llms : [];
+      // Domains already cited by AI get a boost (validates their authority)
+      if (aiCitations > 0) boost += Math.min(aiCitations * 2, 10);
 
       return {
         ...d,
@@ -285,9 +368,12 @@ export default function AuthorityRing() {
         enhancedPriority: Math.min(d.priorityScore + boost, 100),
         weakPersonasServed: personaOverlap,
         weakStagesServed: stageOverlap,
+        aiCitations,
+        aiCitedByLLMs,
+        aiCitedContexts: citedEntry?.contexts || [],
       };
     });
-  }, [perceptionData]);
+  }, [perceptionData, aiCitedDomains]);
 
   const filtered = useMemo(() => {
     let d = [...enhancedDomains];
@@ -313,9 +399,10 @@ export default function AuthorityRing() {
 
   const categories = useMemo(() => [...new Set(DOMAINS.map(d => d.category))].sort(), []);
 
-  // Push M3 output to pipeline when perception data is loaded and domains are enhanced
+  // Push M3 output to pipeline (auto-triggered whenever perception data or citations change)
   useEffect(() => {
-    if (!perceptionData) return;
+    // Only write if we have SOME data (perception or citations)
+    if (!perceptionData && aiCitedDomains.length === 0) return;
     const gapDomains = enhancedDomains.filter(d => d.sirionStatus === "verified_zero");
     const personaDomainMap = {};
     enhancedDomains.forEach(d => {
@@ -324,17 +411,32 @@ export default function AuthorityRing() {
         personaDomainMap[p].push(d.domain);
       });
     });
-    updateModule("m3", {
+    const m3Data = {
       prioritizedDomains: gapDomains.map(d => ({
         domain: d.domain, da: d.da, priority: d.enhancedPriority || d.priorityScore,
         personas: d.buyerPersonas, stages: d.buyingStages, narrativeGap: d.narrativeGap,
+        aiCitations: d.aiCitations || 0,
       })),
       personaDomainMap,
+      aiCitedDomains: aiCitedDomains.slice(0, 50),
       gapCount: stats.zeros,
       strongCount: stats.strong,
       analyzedAt: new Date().toISOString(),
-    });
-  }, [perceptionData, enhancedDomains]);
+    };
+    updateModule("m3", m3Data);
+
+    // Hard save M3 state to Firebase (fire-and-forget)
+    db.saveWithId("m3_authority_ring", "latest", {
+      ...m3Data,
+      allDomains: enhancedDomains.map(d => ({
+        id: d.id, domain: d.domain, da: d.da, status: d.sirionStatus,
+        priority: d.enhancedPriority || d.priorityScore,
+        aiCitations: d.aiCitations || 0,
+        category: d.category,
+      })),
+      savedAt: new Date().toISOString(),
+    }).catch(e => console.warn("[M3] Firebase save failed:", e));
+  }, [perceptionData, enhancedDomains, aiCitedDomains]);
 
   const tipStyle = { background: T.card, border: `1px solid ${T.borderActive}`, borderRadius: 8, fontSize: 11, fontFamily: T.b, color: T.text, padding: "8px 12px", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" };
 
@@ -477,6 +579,9 @@ export default function AuthorityRing() {
                             ? <span style={{ fontSize: 10, fontWeight: 800, fontFamily: T.m, color: "#fff", background: "linear-gradient(135deg, #DC2626, #EA580C)", padding: "2px 8px", borderRadius: 4, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>ICERTIS PRESENT</span>
                             : <span style={{ fontSize: 11, color: T.red, fontFamily: T.m, opacity: 0.7 }}>ICERTIS ✓</span>
                         )}
+                        {d.aiCitations > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 800, fontFamily: T.m, color: "#000", background: "linear-gradient(135deg, #22D3EE, #3B82F6)", padding: "2px 8px", borderRadius: 4, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>AI CITED ×{d.aiCitations}</span>
+                        )}
                       </div>
                       <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>
                         <span style={{ color: T.dim }}>{d.category}</span>
@@ -528,7 +633,7 @@ export default function AuthorityRing() {
                       {/* Perception Intelligence (when M2 data is imported) */}
                       {perceptionData && (d.weakPersonasServed?.length > 0 || d.matchingGaps?.length > 0) && (
                         <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.teal + "06", border: `1px solid ${T.teal}18` }}>
-                          <Label color={T.teal}>⚡ PERCEPTION INTELLIGENCE (FROM M2)</Label>
+                          <Label color={T.teal}>PERCEPTION INTELLIGENCE (FROM M2)</Label>
                           {d.weakPersonasServed?.length > 0 && (
                             <div style={{ marginBottom: 6 }}>
                               <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>SERVES WEAK PERSONAS: </span>
@@ -545,11 +650,40 @@ export default function AuthorityRing() {
                             <div>
                               <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>ADDRESSES CONTENT GAPS:</span>
                               {d.matchingGaps.slice(0, 3).map((g, i) => (
-                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.teal}30` }}>• {g}</div>
+                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.teal}30` }}>- {g}</div>
                               ))}
                               {d.matchingGaps.length > 3 && <div style={{ fontSize: 11, color: T.dim, paddingLeft: 8, marginTop: 2 }}>+{d.matchingGaps.length - 3} more</div>}
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {/* AI Citation Intelligence (cross-referenced from M2 scan results) */}
+                      {d.aiCitations > 0 && (
+                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.cyan + "06", border: `1px solid ${T.cyan}18` }}>
+                          <Label color={T.cyan}>AI CITATION INTELLIGENCE</Label>
+                          <div style={{ display: "flex", gap: 16, marginBottom: 6 }}>
+                            <div>
+                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITED </span>
+                              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, fontFamily: T.h }}>{d.aiCitations}x</span>
+                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}> across scan results</span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>BY: </span>
+                              {d.aiCitedByLLMs?.map(lid => (
+                                <Chip key={lid} text={lid.charAt(0).toUpperCase() + lid.slice(1)} color={T.blue} small />
+                              ))}
+                            </div>
+                          </div>
+                          {d.aiCitedContexts?.length > 0 && (
+                            <div>
+                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITATION CONTEXT:</span>
+                              {d.aiCitedContexts.slice(0, 3).map((ctx, i) => (
+                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.cyan}30` }}>- {ctx}</div>
+                              ))}
+                            </div>
+                          )}
+                          <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>This domain is already being cited by AI models. Content published here has high authority signal.</div>
                         </div>
                       )}
                     </div>
@@ -563,67 +697,66 @@ export default function AuthorityRing() {
         {/* ═══ TAB: PERCEPTION INTEL (M2→M3 Bridge) ═══ */}
         {nav === "perception" && (
           <>
-            <Label color={T.teal}>PERCEPTION INTELLIGENCE — M2→M3 BRIDGE</Label>
+            <Label color={T.teal}>PERCEPTION INTELLIGENCE — M2→M3 AUTO-BRIDGE</Label>
             <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>
-              Import gap data from the AI Perception Monitor to dynamically prioritize domain outreach.
-              When active, domain priority scores are boosted based on how well each domain addresses your weakest personas and content gaps.
+              Scan data from the Perception Monitor flows automatically into Authority Ring.
+              Domain priority scores are boosted based on how well each domain addresses your weakest personas, content gaps, and AI citation patterns.
             </p>
 
-            {/* Import UI */}
-            <Panel glow={T.teal} style={{ borderLeft: `3px solid ${T.teal}`, marginBottom: 16 }}>
-              <Label color={T.teal}>IMPORT PERCEPTION DATA</Label>
-              <div style={{ fontSize: 11, color: T.muted, marginBottom: 10, lineHeight: 1.5 }}>
-                Go to <strong>Perception Monitor → Settings → "Export Gap Data for Authority Ring"</strong> and copy the JSON.
-                Paste it below to activate intelligent domain prioritization.
-              </div>
-              <textarea
-                value={perceptionImportText}
-                onChange={(e) => setPerceptionImportText(e.target.value)}
-                placeholder='Paste the exported JSON from Perception Monitor here...\n\n{"source": "xtrusio-perception-monitor", "scores": {...}, "queries": [...], ...}'
-                style={{
-                  width: "100%", minHeight: 100, maxHeight: 250, padding: "10px 12px", borderRadius: 8,
-                  background: T.surface, border: `1px solid ${T.border}`, color: T.text, fontSize: 11,
-                  fontFamily: T.m, resize: "vertical", lineHeight: 1.5, outline: "none",
-                }}
-                onFocus={(e) => { e.target.style.borderColor = T.teal + "50"; }}
-                onBlur={(e) => { e.target.style.borderColor = T.border; }}
-              />
-              <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-                <button onClick={() => {
-                  try {
-                    const data = JSON.parse(perceptionImportText);
-                    if (data.source !== "xtrusio-perception-monitor") {
-                      setPerceptionStatus({ type: "error", msg: "Invalid data format. Expected export from Perception Monitor." });
-                      return;
-                    }
-                    setPerceptionData(data);
-                    setPerceptionStatus({ type: "success", msg: `Imported: ${data.totalQueries} queries, ${data.scores?.overall}/100 overall score. Domain priorities updated.` });
-                  } catch {
-                    setPerceptionStatus({ type: "error", msg: "Invalid JSON. Copy the exact output from Perception Monitor → Export." });
-                  }
-                }} disabled={!perceptionImportText.trim()}
-                  style={{ padding: "9px 22px", borderRadius: 8, border: "none", cursor: !perceptionImportText.trim() ? "not-allowed" : "pointer", background: `linear-gradient(135deg, ${T.teal}, ${T.blue})`, color: "#000", fontWeight: 700, fontSize: 12, fontFamily: T.m, opacity: !perceptionImportText.trim() ? 0.5 : 1 }}>
-                  ⚡ Import & Activate
-                </button>
-                {perceptionData && (
-                  <button onClick={() => { setPerceptionData(null); setPerceptionStatus({ type: "success", msg: "Perception data cleared. Using default priority scores." }); }}
-                    style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.surface, color: T.muted, fontSize: 11, cursor: "pointer", fontFamily: T.m }}>
-                    ↺ Clear & Reset
-                  </button>
-                )}
-                <button onClick={() => { setPerceptionImportText(""); setPerceptionStatus(null); }}
-                  style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.surface, color: T.muted, fontSize: 11, cursor: "pointer", fontFamily: T.m }}>
-                  Clear Text
-                </button>
+            {/* Auto-sync Status */}
+            <Panel glow={T.teal} style={{ borderLeft: `3px solid ${perceptionData ? T.green : T.dim}`, marginBottom: 16 }}>
+              <Label color={perceptionData ? T.green : T.dim}>DATA SYNC STATUS</Label>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: perceptionData ? T.green : T.dim, boxShadow: perceptionData ? `0 0 8px ${T.green}50` : "none" }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: perceptionData ? T.green : T.dim, fontFamily: T.m }}>
+                  {perceptionData ? "ACTIVE — Auto-synced from M2" : "WAITING — Run a scan in Perception Monitor first"}
+                </span>
               </div>
               {perceptionStatus && (
-                <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 6, background: perceptionStatus.type === "success" ? T.green + "08" : T.red + "08", border: `1px solid ${perceptionStatus.type === "success" ? T.green : T.red}25` }}>
-                  <span style={{ fontSize: 11, color: perceptionStatus.type === "success" ? T.green : T.red, fontWeight: 600 }}>
-                    {perceptionStatus.type === "success" ? "✓" : "✗"} {perceptionStatus.msg}
-                  </span>
+                <div style={{ fontSize: 11, color: perceptionStatus.type === "success" ? T.green : T.red, fontWeight: 600 }}>
+                  {perceptionStatus.msg}
+                </div>
+              )}
+              {perceptionData && (
+                <div style={{ marginTop: 8, display: "flex", gap: 16, fontSize: 11, color: T.muted }}>
+                  <span>Queries: <strong style={{ color: T.text }}>{perceptionData.totalQueries}</strong></span>
+                  <span>Score: <strong style={{ color: T.teal }}>{perceptionData.scores?.overall}/100</strong></span>
+                  <span>Gaps: <strong style={{ color: T.red }}>{perceptionData.allContentGaps?.length || 0}</strong></span>
+                  <span>AI-Cited Domains: <strong style={{ color: T.cyan }}>{aiCitedDomains.length}</strong></span>
                 </div>
               )}
             </Panel>
+
+            {/* AI-Cited Domains Cross-Reference */}
+            {aiCitedDomains.length > 0 && (
+              <Panel glow={T.cyan} style={{ borderLeft: `3px solid ${T.cyan}`, marginBottom: 16 }}>
+                <Label color={T.cyan}>AI-CITED AUTHORITY DOMAINS ({aiCitedDomains.length} MATCHED)</Label>
+                <p style={{ fontSize: 11, color: T.muted, marginBottom: 10, lineHeight: 1.5 }}>
+                  These domains from the Authority Ring are being actively cited by AI models in scan results. Publishing Sirion content here has the highest impact on AI perception.
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {aiCitedDomains.slice(0, 10).map(c => {
+                    const domObj = DOMAINS.find(d => d.id === c.domainId);
+                    return (
+                      <div key={c.domainId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderRadius: 6, background: T.surface }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, fontFamily: T.h, minWidth: 30, textAlign: "center" }}>{c.citationCount}</span>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{c.domain}</span>
+                          <span style={{ fontSize: 11, color: T.dim, marginLeft: 8 }}>{domObj?.category}</span>
+                          {domObj && <StatusBadge status={domObj.sirionStatus} />}
+                        </div>
+                        <div style={{ display: "flex", gap: 3 }}>
+                          {c.llms.map(lid => <Chip key={lid} text={lid} color={T.blue} small />)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {aiCitedDomains.length > 10 && (
+                  <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>+{aiCitedDomains.length - 10} more domains</div>
+                )}
+              </Panel>
+            )}
 
             {/* Perception Dashboard (when data is loaded) */}
             {perceptionData && (
@@ -765,14 +898,13 @@ export default function AuthorityRing() {
             {/* Empty State */}
             {!perceptionData && (
               <Panel style={{ textAlign: "center", padding: "48px 20px" }}>
-                <div style={{ fontSize: 36, marginBottom: 12 }}>⚡</div>
-                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: T.h, marginBottom: 8 }}>No Perception Data Imported</div>
+                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: T.h, marginBottom: 8 }}>No Scan Data Available</div>
                 <div style={{ color: T.muted, fontSize: 11, maxWidth: 440, margin: "0 auto", lineHeight: 1.6 }}>
-                  Import scan data from the AI Perception Monitor to unlock intelligent domain prioritization.
-                  The Authority Ring will automatically boost domain scores based on your weakest personas, stages, and content gaps.
+                  Run a scan in the Perception Monitor (M2) to automatically feed data into the Authority Ring.
+                  Domain priority scores will be boosted based on your weakest personas, stages, and content gaps.
                 </div>
                 <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "center" }}>
-                  <span style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>Perception Monitor → Settings → Export Gap Data → Copy → Paste above</span>
+                  <span style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>Navigate to Perception Monitor → Run Scan → Data flows here automatically</span>
                 </div>
               </Panel>
             )}
