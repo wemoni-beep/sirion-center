@@ -6,6 +6,9 @@ import { usePipeline } from "./PipelineContext";
 import { buildExportPayload } from "./scanEngine";
 import { db } from "./firebase";
 
+// Firebase stores arrays as objects with numeric keys — normalize everywhere
+const asArray = v => Array.isArray(v) ? v : (v && typeof v === "object" && !v.nodeType ? Object.values(v) : []);
+
 /* ═══════════════════════════════════════════════════════
    AUTHORITY RING — Module 2 of Xtrusio Platform
    Gap identification → Outreach roadmap → Cost modeling
@@ -240,7 +243,15 @@ export default function AuthorityRing() {
 
     // Priority 1: exportPayload already built by M2
     if (pipeline.m2.exportPayload) {
-      setPerceptionData(pipeline.m2.exportPayload);
+      const ep = pipeline.m2.exportPayload;
+      // Normalize inner arrays (Firebase may store as objects with numeric keys)
+      setPerceptionData({
+        ...ep,
+        personaBreakdown: asArray(ep.personaBreakdown),
+        stageBreakdown: asArray(ep.stageBreakdown),
+        allContentGaps: asArray(ep.allContentGaps),
+        allRecommendations: asArray(ep.allRecommendations),
+      });
       setPipelineM2Loaded(true);
       setPerceptionStatus({ type: "success", msg: `Auto-loaded perception data from M2 (${pipeline.m2.scores?.overall || 0}/100 overall score).` });
       return;
@@ -250,20 +261,23 @@ export default function AuthorityRing() {
     const rawSR = pipeline.m2.scanResults;
     const srResults = rawSR?.results;
     // Normalize: Firebase may store arrays as objects with numeric keys
-    const srArr = Array.isArray(srResults) ? srResults : (srResults && typeof srResults === "object" ? Object.values(srResults) : []);
+    const srArr = asArray(srResults);
     if (srArr.length > 0) {
       try {
-        // Normalize the scanResults before passing to buildExportPayload
-        const normalizedSR = {
-          ...rawSR,
-          results: srArr,
-          llms: Array.isArray(rawSR.llms) ? rawSR.llms : (rawSR.llms && typeof rawSR.llms === "object" ? Object.values(rawSR.llms) : []),
-        };
+        const normalizedSR = { ...rawSR, results: srArr, llms: asArray(rawSR.llms) };
         const payload = buildExportPayload(normalizedSR);
-        setPerceptionData(payload);
+        // Normalize payload inner arrays too
+        const safePayload = {
+          ...payload,
+          personaBreakdown: asArray(payload.personaBreakdown),
+          stageBreakdown: asArray(payload.stageBreakdown),
+          allContentGaps: asArray(payload.allContentGaps),
+          allRecommendations: asArray(payload.allRecommendations),
+        };
+        setPerceptionData(safePayload);
         setPipelineM2Loaded(true);
         // Also save the constructed payload back to pipeline so M3 doesn't rebuild next time
-        updateModule("m2", { exportPayload: payload });
+        updateModule("m2", { exportPayload: safePayload });
         setPerceptionStatus({ type: "success", msg: `Auto-constructed perception data from ${srArr.length} scan results (${pipeline.m2.scores?.overall || 0}/100).` });
       } catch (e) {
         console.warn("[M3] Failed to build perception data from scanResults:", e);
@@ -274,10 +288,8 @@ export default function AuthorityRing() {
   // Cross-reference AI-cited domains with Authority Ring domain list
   useEffect(() => {
     const scanResults = pipeline.m2.scanResults;
-    // Normalize results: Firebase may store arrays as objects with numeric keys
-    const rawResults = scanResults?.results;
-    const resultsArr = Array.isArray(rawResults) ? rawResults : (rawResults && typeof rawResults === "object" ? Object.values(rawResults) : []);
-    const llmsArr = Array.isArray(scanResults?.llms) ? scanResults.llms : (scanResults?.llms && typeof scanResults.llms === "object" ? Object.values(scanResults.llms) : []);
+    const resultsArr = asArray(scanResults?.results);
+    const llmsArr = asArray(scanResults?.llms);
     if (!resultsArr.length) { setAiCitedDomains([]); return; }
 
     const domainMap = {};
@@ -322,9 +334,11 @@ export default function AuthorityRing() {
     if (!perceptionData && aiCitedDomains.length === 0) return DOMAINS;
 
     // Pre-compute weak personas and stages once (outside the map)
-    const weakPersonas = perceptionData?.personaBreakdown?.filter(p => p.mentionRate < 70).map(p => p.persona) || [];
-    const weakStages = perceptionData?.stageBreakdown?.filter(s => s.mentionRate < 70).map(s => s.stage.toLowerCase()) || [];
-    const weakest = perceptionData?.personaBreakdown?.length > 0 ? perceptionData.personaBreakdown.reduce((a, b) => a.mentionRate < b.mentionRate ? a : b) : null;
+    const pbArr = asArray(perceptionData?.personaBreakdown);
+    const sbArr = asArray(perceptionData?.stageBreakdown);
+    const weakPersonas = pbArr.filter(p => p.mentionRate < 70).map(p => p.persona);
+    const weakStages = sbArr.filter(s => s.mentionRate < 70).map(s => s.stage.toLowerCase());
+    const weakest = pbArr.length > 0 ? pbArr.reduce((a, b) => a.mentionRate < b.mentionRate ? a : b) : null;
 
     return DOMAINS.map(d => {
       let boost = 0;
@@ -340,7 +354,7 @@ export default function AuthorityRing() {
         boost += stageOverlap.length * 2;
 
         // Match domain topics to content gaps
-        (perceptionData.allContentGaps || []).forEach(gap => {
+        asArray(perceptionData.allContentGaps).forEach(gap => {
           const gapLower = gap.toLowerCase();
           (d.topicsFit || []).forEach(topic => {
             if (gapLower.includes(topic.toLowerCase()) || topic.toLowerCase().split(" ").some(w => w.length > 4 && gapLower.includes(w))) {
@@ -781,7 +795,7 @@ export default function AuthorityRing() {
                   <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>
                     Personas with {"<"}70% AI mention rate need the most authority building. Domains below directly serve these weak personas.
                   </p>
-                  {(perceptionData.personaBreakdown || [])
+                  {asArray(perceptionData.personaBreakdown)
                     .sort((a, b) => a.mentionRate - b.mentionRate)
                     .map(p => {
                       const domainsForPersona = enhancedDomains
@@ -816,7 +830,7 @@ export default function AuthorityRing() {
                 {/* Stage Weakness → Domain Mapping */}
                 <Panel glow={T.gold} style={{ marginBottom: 16 }}>
                   <Label color={T.gold}>WEAK STAGES → CONTENT TYPE NEEDED</Label>
-                  {(perceptionData.stageBreakdown || [])
+                  {asArray(perceptionData.stageBreakdown)
                     .sort((a, b) => a.mentionRate - b.mentionRate)
                     .map(s => {
                       const stageConfig = STAGES.find(st => st.label.toLowerCase() === s.stage.toLowerCase());
@@ -841,7 +855,7 @@ export default function AuthorityRing() {
                   <p style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
                     Content gaps identified by the Perception Monitor, matched to domains that can address them.
                   </p>
-                  {(perceptionData.allContentGaps || []).slice(0, 10).map((gap, i) => {
+                  {asArray(perceptionData.allContentGaps).slice(0, 10).map((gap, i) => {
                     const matchingDoms = enhancedDomains.filter(d =>
                       (d.matchingGaps || []).includes(gap)
                     ).slice(0, 3);
