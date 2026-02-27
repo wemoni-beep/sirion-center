@@ -1,0 +1,7 @@
+:root { --body:'Inter',system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono','SF Mono','Fira Code',monospace; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0a0c; overflow-x: hidden; min-height: 100vh; font-family: var(--body); }
+button, input, select, textarea { font-family: inherit; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(167,139,250,0.15); border-radius: 2px; }
