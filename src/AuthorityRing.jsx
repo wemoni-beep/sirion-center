@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { FONT } from "./typography";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, PieChart, Pie, Cell, Treemap, CartesianGrid } from "recharts";
 import { useTheme } from "./ThemeContext";
@@ -228,6 +228,7 @@ export default function AuthorityRing() {
   const [filterCategory, setFilterCategory] = useState(null);
   const [filterPersona, setFilterPersona] = useState(null);
   const [sortBy, setSortBy] = useState("priorityScore");
+  const [sortDir, setSortDir] = useState("desc");
   const [view, setView] = useState("list");
 
   // ═══ M2→M3 BRIDGE: Auto-load perception data ═══
@@ -236,6 +237,16 @@ export default function AuthorityRing() {
   const [perceptionStatus, setPerceptionStatus] = useState(null);
   const [pipelineM2Loaded, setPipelineM2Loaded] = useState(false);
   const [aiCitedDomains, setAiCitedDomains] = useState([]);
+  const [outreachTracker, setOutreachTracker] = useState(() => pipeline.m3?.outreachTracker || {});
+  const [outreachFilter, setOutreachFilter] = useState("all");
+
+  const updateOutreachStatus = useCallback((domainId, field, value) => {
+    setOutreachTracker(prev => {
+      const next = { ...prev, [domainId]: { ...prev[domainId], [field]: value, updatedAt: new Date().toISOString() } };
+      updateModule("m3", { outreachTracker: next });
+      return next;
+    });
+  }, [updateModule]);
 
   // Auto-load M2 perception data from pipeline (exportPayload OR fallback to scanResults)
   useEffect(() => {
@@ -389,15 +400,21 @@ export default function AuthorityRing() {
     });
   }, [perceptionData, aiCitedDomains]);
 
+  const toggleSort = useCallback((col) => {
+    if (sortBy === col) setSortDir(d => d === "desc" ? "asc" : "desc");
+    else { setSortBy(col); setSortDir("desc"); }
+  }, [sortBy]);
+
   const filtered = useMemo(() => {
     let d = [...enhancedDomains];
     if (filterStatus) d = d.filter(x => x.sirionStatus === filterStatus);
     if (filterCategory) d = d.filter(x => x.category === filterCategory);
     if (filterPersona) d = d.filter(x => x.buyerPersonas?.includes(filterPersona));
     const sortKey = perceptionData && sortBy === "priorityScore" ? "enhancedPriority" : sortBy;
-    d.sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+    const mul = sortDir === "desc" ? 1 : -1;
+    d.sort((a, b) => mul * ((b[sortKey] || 0) - (a[sortKey] || 0)));
     return d;
-  }, [filterStatus, filterCategory, filterPersona, sortBy, enhancedDomains, perceptionData]);
+  }, [filterStatus, filterCategory, filterPersona, sortBy, sortDir, enhancedDomains, perceptionData]);
 
   const stats = useMemo(() => {
     const zeros = DOMAINS.filter(d => d.sirionStatus === "verified_zero").length;
@@ -559,152 +576,185 @@ export default function AuthorityRing() {
                   {s ? s.replace("verified_", "").toUpperCase() : "ALL"}
                 </button>
               ))}
-              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m, marginLeft: 10, marginRight: 4 }}>SORT:</span>
-              <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-                style={{ fontSize: 11, fontFamily: T.m, background: T.surface, border: `1px solid ${T.border}`, color: T.text, borderRadius: 6, padding: "4px 8px" }}>
-                <option value="priorityScore">Priority Score</option>
-                <option value="da">Domain Authority</option>
-                <option value="aiCitationWeight">AI Citation Weight</option>
-                <option value="estCostLow">Cost (Low→High)</option>
-              </select>
+              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m, marginLeft: 10 }}>{filtered.length} of {DOMAINS.length} domains</span>
             </div>
 
-            {/* Domain List */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {filtered.map(d => (
-                <Panel key={d.id} onClick={() => setSelectedDomain(selectedDomain === d.id ? null : d.id)} active={selectedDomain === d.id}
-                  style={{ padding: "12px 16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    {/* Priority Score */}
-                    <div style={{ position: "relative", width: 38, height: 38, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, fontFamily: T.h, color: (d.enhancedPriority || d.priorityScore) >= 90 ? T.red : (d.enhancedPriority || d.priorityScore) >= 75 ? T.gold : T.dim, background: (d.enhancedPriority || d.priorityScore) >= 90 ? "rgba(248,113,113,0.08)" : (d.enhancedPriority || d.priorityScore) >= 75 ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: `1px solid ${(d.enhancedPriority || d.priorityScore) >= 90 ? "rgba(248,113,113,0.15)" : (d.enhancedPriority || d.priorityScore) >= 75 ? "rgba(251,191,36,0.15)" : "rgba(255,255,255,0.06)"}`, flexShrink: 0 }}>
-                      {d.enhancedPriority || d.priorityScore}
-                      {d.perceptionBoost > 0 && <span style={{ position: "absolute", top: -4, right: -4, fontSize: 11, fontWeight: 800, color: "#000", background: T.teal, borderRadius: 6, padding: "1px 3px", fontFamily: T.m }}>+{d.perceptionBoost}</span>}
-                    </div>
-
-                    {/* Domain Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: T.text, fontFamily: T.b }}>{d.domain}</span>
-                        <StatusBadge status={d.sirionStatus} />
-                        <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>DA {d.da}</span>
-                        <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>AI {d.aiCitationWeight}</span>
-                        {d.icertisPresent && (
-                          d.sirionStatus === "verified_zero"
-                            ? <span style={{ fontSize: 10, fontWeight: 800, fontFamily: T.m, color: "#fff", background: "linear-gradient(135deg, #DC2626, #EA580C)", padding: "2px 8px", borderRadius: 4, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>ICERTIS PRESENT</span>
-                            : <span style={{ fontSize: 11, color: T.red, fontFamily: T.m, opacity: 0.7 }}>ICERTIS ✓</span>
-                        )}
-                        {d.aiCitations > 0 && (
-                          <span style={{ fontSize: 10, fontWeight: 800, fontFamily: T.m, color: "#000", background: "linear-gradient(135deg, #22D3EE, #3B82F6)", padding: "2px 8px", borderRadius: 4, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>AI CITED ×{d.aiCitations}</span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>
-                        <span style={{ color: T.dim }}>{d.category}</span>
-                        {d.approach && <span style={{ color: T.accent, marginLeft: 8 }}>→ {d.approach}</span>}
-                      </div>
-                    </div>
-
-                    {/* Cost + Difficulty */}
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 11, fontFamily: T.m, color: T.text }}>${(d.estCostLow/1000).toFixed(1)}K–${(d.estCostHigh/1000).toFixed(1)}K</div>
-                      <DifficultyBadge d={d.difficulty} />
-                    </div>
+            {/* ═══ SORTABLE DOMAIN TABLE ═══ */}
+            {(() => {
+              const thBase = { padding: "8px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.06em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", position: "sticky", top: 0, background: T.bg, zIndex: 2 };
+              const thActive = (col) => sortBy === col ? { color: T.accent } : {};
+              const arrow = (col) => sortBy === col ? (sortDir === "desc" ? " ▼" : " ▲") : "";
+              const tdBase = { padding: "8px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+              const scoreColor = (s) => s >= 90 ? T.red : s >= 75 ? T.gold : T.dim;
+              return (
+                <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "hidden", background: T.surface }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ ...thBase, width: 36, textAlign: "center", ...thActive("priorityScore") }} onClick={() => toggleSort("priorityScore")}>SCORE{arrow("priorityScore")}</th>
+                          <th style={{ ...thBase, minWidth: 120 }}>DOMAIN</th>
+                          <th style={{ ...thBase, width: 70, textAlign: "center" }}>STATUS</th>
+                          <th style={{ ...thBase, width: 44, textAlign: "center", ...thActive("da") }} onClick={() => toggleSort("da")}>DA{arrow("da")}</th>
+                          <th style={{ ...thBase, width: 44, textAlign: "center", ...thActive("aiCitationWeight") }} onClick={() => toggleSort("aiCitationWeight")}>AI{arrow("aiCitationWeight")}</th>
+                          <th style={{ ...thBase, width: 80, textAlign: "center" }}>COMPETE</th>
+                          <th style={{ ...thBase, minWidth: 100 }}>CATEGORY</th>
+                          <th style={{ ...thBase, minWidth: 140 }}>APPROACH</th>
+                          <th style={{ ...thBase, width: 90, textAlign: "right", ...thActive("estCostLow") }} onClick={() => toggleSort("estCostLow")}>COST{arrow("estCostLow")}</th>
+                          <th style={{ ...thBase, width: 70, textAlign: "center" }}>DIFF</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map((d, idx) => {
+                          const ps = d.enhancedPriority || d.priorityScore;
+                          const isExpanded = selectedDomain === d.id;
+                          return (
+                            <React.Fragment key={d.id}>
+                              <tr onClick={() => setSelectedDomain(isExpanded ? null : d.id)}
+                                style={{ cursor: "pointer", background: isExpanded ? T.accentDim : idx % 2 === 0 ? "transparent" : T.bg + "80", transition: "background 0.15s" }}
+                                onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = T.cardHover; }}
+                                onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = idx % 2 === 0 ? "transparent" : T.bg + "80"; }}>
+                                {/* Score */}
+                                <td style={{ ...tdBase, textAlign: "center", position: "relative" }}>
+                                  <span style={{ fontWeight: 800, fontFamily: T.h, fontSize: 13, color: scoreColor(ps) }}>{ps}</span>
+                                  {d.perceptionBoost > 0 && (
+                                    <span title="AI perception boost from M2 scan data" style={{ position: "absolute", top: 2, right: 2, fontSize: 9, fontWeight: 800, color: "#000", background: T.teal, borderRadius: 4, padding: "0 3px", fontFamily: T.m }}>+{d.perceptionBoost}</span>
+                                  )}
+                                </td>
+                                {/* Domain */}
+                                <td style={{ ...tdBase, fontWeight: 600, color: T.text }}>
+                                  {d.domain}
+                                  {d.aiCitations > 0 && (
+                                    <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, fontFamily: T.m, color: "#000", background: "linear-gradient(135deg, #22D3EE, #3B82F6)", padding: "1px 6px", borderRadius: 3, verticalAlign: "middle" }}>AI x{d.aiCitations}</span>
+                                  )}
+                                </td>
+                                {/* Status */}
+                                <td style={{ ...tdBase, textAlign: "center" }}><StatusBadge status={d.sirionStatus} /></td>
+                                {/* DA */}
+                                <td style={{ ...tdBase, textAlign: "center", fontFamily: T.m, fontWeight: 600, color: d.da >= 85 ? T.green : T.muted }}>{d.da}</td>
+                                {/* AI Weight */}
+                                <td style={{ ...tdBase, textAlign: "center", fontFamily: T.m, fontWeight: 600, color: d.aiCitationWeight >= 85 ? T.cyan : T.muted }}>{d.aiCitationWeight}</td>
+                                {/* Competitor */}
+                                <td style={{ ...tdBase, textAlign: "center" }}>
+                                  {d.icertisPresent
+                                    ? d.sirionStatus === "verified_zero"
+                                      ? <span style={{ fontSize: 9, fontWeight: 800, fontFamily: T.m, color: "#fff", background: T.red, padding: "2px 6px", borderRadius: 3 }}>ICERTIS</span>
+                                      : <span style={{ fontSize: 9, fontFamily: T.m, color: T.red, opacity: 0.7 }}>ICERTIS</span>
+                                    : <span style={{ fontSize: 9, color: T.dim }}>--</span>
+                                  }
+                                </td>
+                                {/* Category */}
+                                <td style={{ ...tdBase, fontSize: 10, color: T.muted }}>{d.category}</td>
+                                {/* Approach */}
+                                <td style={{ ...tdBase, fontSize: 10, color: T.accent }}>{d.approach || "--"}</td>
+                                {/* Cost */}
+                                <td style={{ ...tdBase, textAlign: "right", fontFamily: T.m, fontSize: 10 }}>${(d.estCostLow/1000).toFixed(1)}K-${(d.estCostHigh/1000).toFixed(1)}K</td>
+                                {/* Difficulty */}
+                                <td style={{ ...tdBase, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                              </tr>
+                              {/* Expanded Detail Row */}
+                              {isExpanded && (
+                                <tr>
+                                  <td colSpan={10} style={{ padding: 0, borderBottom: `2px solid ${T.accent}30` }} onClick={e => e.stopPropagation()}>
+                                    <div style={{ padding: "14px 18px", background: T.card }}>
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                                        <div>
+                                          <Label color={T.accent}>CURRENT SIRION PRESENCE</Label>
+                                          <p style={{ fontSize: 11, color: d.sirionStatus === "verified_zero" ? T.red : T.muted, lineHeight: 1.5 }}>
+                                            {d.sirionPresence || "No presence found. Verified zero with Google Boolean search."}
+                                          </p>
+                                          {d.narrativeGap && <>
+                                            <Label color={T.gold}>NARRATIVE GAP</Label>
+                                            <p style={{ fontSize: 11, color: T.gold, lineHeight: 1.5, opacity: 0.85 }}>{d.narrativeGap}</p>
+                                          </>}
+                                        </div>
+                                        <div>
+                                          <Label color={T.teal}>OUTREACH METHOD</Label>
+                                          <p style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>{d.method}</p>
+                                          <div style={{ marginTop: 8 }}>
+                                            <Label color={T.dim}>VERIFICATION</Label>
+                                            <div style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>
+                                              {d.searchQueries?.map((q, i) => <div key={i} style={{ marginBottom: 2 }}>-- {q}</div>)}
+                                              <div style={{ marginTop: 4, color: T.green }}>Verified: {d.verifiedDate}</div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                      {/* Tags */}
+                                      <div style={{ marginTop: 10, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                        {d.topicsFit?.map(t => <Chip key={t} text={t} color={T.accent} small />)}
+                                        {d.buyerPersonas?.map(p => <Chip key={p} text={p} color={T.teal} small />)}
+                                        {d.buyingStages?.map(s => <Chip key={s} text={s} color={T.gold} small />)}
+                                        {d.fiverr && <Chip text="FIVERR" color={T.blue} small />}
+                                      </div>
+                                      {/* Perception Intelligence */}
+                                      {perceptionData && (d.weakPersonasServed?.length > 0 || d.matchingGaps?.length > 0) && (
+                                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.teal + "06", border: `1px solid ${T.teal}18` }}>
+                                          <Label color={T.teal}>PERCEPTION INTELLIGENCE (FROM M2)</Label>
+                                          {d.weakPersonasServed?.length > 0 && (
+                                            <div style={{ marginBottom: 6 }}>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>SERVES WEAK PERSONAS: </span>
+                                              {d.weakPersonasServed.map(p => <Chip key={p} text={p} color={T.teal} small />)}
+                                            </div>
+                                          )}
+                                          {d.weakStagesServed?.length > 0 && (
+                                            <div style={{ marginBottom: 6 }}>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>COVERS WEAK STAGES: </span>
+                                              {d.weakStagesServed.map(s => <Chip key={s} text={s} color={T.gold} small />)}
+                                            </div>
+                                          )}
+                                          {d.matchingGaps?.length > 0 && (
+                                            <div>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>ADDRESSES CONTENT GAPS:</span>
+                                              {d.matchingGaps.slice(0, 3).map((g, i) => (
+                                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.teal}30` }}>- {g}</div>
+                                              ))}
+                                              {d.matchingGaps.length > 3 && <div style={{ fontSize: 11, color: T.dim, paddingLeft: 8, marginTop: 2 }}>+{d.matchingGaps.length - 3} more</div>}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      {/* AI Citation Intelligence */}
+                                      {d.aiCitations > 0 && (
+                                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.cyan + "06", border: `1px solid ${T.cyan}18` }}>
+                                          <Label color={T.cyan}>AI CITATION INTELLIGENCE</Label>
+                                          <div style={{ display: "flex", gap: 16, marginBottom: 6 }}>
+                                            <div>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITED </span>
+                                              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, fontFamily: T.h }}>{d.aiCitations}x</span>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}> across scan results</span>
+                                            </div>
+                                            <div>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>BY: </span>
+                                              {d.aiCitedByLLMs?.map(lid => (
+                                                <Chip key={lid} text={lid.charAt(0).toUpperCase() + lid.slice(1)} color={T.blue} small />
+                                              ))}
+                                            </div>
+                                          </div>
+                                          {d.aiCitedContexts?.length > 0 && (
+                                            <div>
+                                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITATION CONTEXT:</span>
+                                              {d.aiCitedContexts.slice(0, 3).map((ctx, i) => (
+                                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.cyan}30` }}>- {ctx}</div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>This domain is already being cited by AI models. Content published here has high authority signal.</div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-
-                  {/* Expanded Detail */}
-                  {selectedDomain === d.id && (
-                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}` }} onClick={e => e.stopPropagation()}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                        <div>
-                          <Label color={T.accent}>CURRENT SIRION PRESENCE</Label>
-                          <p style={{ fontSize: 11, color: d.sirionStatus === "verified_zero" ? T.red : T.muted, lineHeight: 1.5 }}>
-                            {d.sirionPresence || "No presence found. Verified zero with Google Boolean search."}
-                          </p>
-                          {d.narrativeGap && <>
-                            <Label color={T.gold}>NARRATIVE GAP</Label>
-                            <p style={{ fontSize: 11, color: T.gold, lineHeight: 1.5, opacity: 0.85 }}>{d.narrativeGap}</p>
-                          </>}
-                        </div>
-                        <div>
-                          <Label color={T.teal}>OUTREACH METHOD</Label>
-                          <p style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>{d.method}</p>
-                          <div style={{ marginTop: 8 }}>
-                            <Label color={T.dim}>VERIFICATION</Label>
-                            <div style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>
-                              {d.searchQueries?.map((q, i) => <div key={i} style={{ marginBottom: 2 }}>→ {q}</div>)}
-                              <div style={{ marginTop: 4, color: T.green }}>Verified: {d.verifiedDate}</div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      {/* Tags */}
-                      <div style={{ marginTop: 10, display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {d.topicsFit?.map(t => <Chip key={t} text={t} color={T.accent} small />)}
-                        {d.buyerPersonas?.map(p => <Chip key={p} text={p} color={T.teal} small />)}
-                        {d.buyingStages?.map(s => <Chip key={s} text={s} color={T.gold} small />)}
-                        {d.fiverr && <Chip text="FIVERR" color={T.blue} small />}
-                      </div>
-
-                      {/* Perception Intelligence (when M2 data is imported) */}
-                      {perceptionData && (d.weakPersonasServed?.length > 0 || d.matchingGaps?.length > 0) && (
-                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.teal + "06", border: `1px solid ${T.teal}18` }}>
-                          <Label color={T.teal}>PERCEPTION INTELLIGENCE (FROM M2)</Label>
-                          {d.weakPersonasServed?.length > 0 && (
-                            <div style={{ marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>SERVES WEAK PERSONAS: </span>
-                              {d.weakPersonasServed.map(p => <Chip key={p} text={p} color={T.teal} small />)}
-                            </div>
-                          )}
-                          {d.weakStagesServed?.length > 0 && (
-                            <div style={{ marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>COVERS WEAK STAGES: </span>
-                              {d.weakStagesServed.map(s => <Chip key={s} text={s} color={T.gold} small />)}
-                            </div>
-                          )}
-                          {d.matchingGaps?.length > 0 && (
-                            <div>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>ADDRESSES CONTENT GAPS:</span>
-                              {d.matchingGaps.slice(0, 3).map((g, i) => (
-                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.teal}30` }}>- {g}</div>
-                              ))}
-                              {d.matchingGaps.length > 3 && <div style={{ fontSize: 11, color: T.dim, paddingLeft: 8, marginTop: 2 }}>+{d.matchingGaps.length - 3} more</div>}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* AI Citation Intelligence (cross-referenced from M2 scan results) */}
-                      {d.aiCitations > 0 && (
-                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 6, background: T.cyan + "06", border: `1px solid ${T.cyan}18` }}>
-                          <Label color={T.cyan}>AI CITATION INTELLIGENCE</Label>
-                          <div style={{ display: "flex", gap: 16, marginBottom: 6 }}>
-                            <div>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITED </span>
-                              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, fontFamily: T.h }}>{d.aiCitations}x</span>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}> across scan results</span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>BY: </span>
-                              {d.aiCitedByLLMs?.map(lid => (
-                                <Chip key={lid} text={lid.charAt(0).toUpperCase() + lid.slice(1)} color={T.blue} small />
-                              ))}
-                            </div>
-                          </div>
-                          {d.aiCitedContexts?.length > 0 && (
-                            <div>
-                              <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>CITATION CONTEXT:</span>
-                              {d.aiCitedContexts.slice(0, 3).map((ctx, i) => (
-                                <div key={i} style={{ fontSize: 11, color: T.muted, marginTop: 2, paddingLeft: 8, borderLeft: `2px solid ${T.cyan}30` }}>- {ctx}</div>
-                              ))}
-                            </div>
-                          )}
-                          <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>This domain is already being cited by AI models. Content published here has high authority signal.</div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </Panel>
-              ))}
-            </div>
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -789,89 +839,142 @@ export default function AuthorityRing() {
                   ))}
                 </div>
 
-                {/* Persona Weakness → Domain Mapping */}
-                <Panel glow={T.accent} style={{ marginBottom: 16 }}>
-                  <Label color={T.accent}>WEAK PERSONAS → PRIORITY DOMAINS</Label>
-                  <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>
-                    Personas with {"<"}70% AI mention rate need the most authority building. Domains below directly serve these weak personas.
-                  </p>
-                  {asArray(perceptionData.personaBreakdown)
-                    .sort((a, b) => a.mentionRate - b.mentionRate)
-                    .map(p => {
-                      const domainsForPersona = enhancedDomains
-                        .filter(d => (d.buyerPersonas || []).includes(p.persona) && d.sirionStatus === "verified_zero")
-                        .sort((a, b) => (b.enhancedPriority || b.priorityScore) - (a.enhancedPriority || a.priorityScore))
-                        .slice(0, 5);
-                      const isWeak = p.mentionRate < 70;
-                      return (
-                        <div key={p.persona} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: isWeak ? T.red : T.green, fontFamily: T.h }}>{p.persona}</span>
-                            <span style={{ fontSize: 18, fontWeight: 800, color: isWeak ? T.red : T.green, fontFamily: T.m }}>{p.mentionRate}%</span>
-                            <span style={{ fontSize: 11, color: T.dim }}>{p.total} queries</span>
-                            {isWeak && <Chip text="PRIORITY" color={T.red} small />}
-                          </div>
-                          {isWeak && domainsForPersona.length > 0 && (
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingLeft: 8 }}>
-                              {domainsForPersona.map(d => (
-                                <div key={d.id} style={{ padding: "4px 8px", borderRadius: 6, background: T.surface, border: `1px solid ${T.red}15`, fontSize: 11 }}>
-                                  <span style={{ fontWeight: 600, fontFamily: T.m }}>{d.domain}</span>
-                                  <span style={{ fontSize: 11, color: T.dim, marginLeft: 4 }}>DA {d.da}</span>
-                                  <DifficultyBadge d={d.difficulty} />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                </Panel>
-
-                {/* Stage Weakness → Domain Mapping */}
-                <Panel glow={T.gold} style={{ marginBottom: 16 }}>
-                  <Label color={T.gold}>WEAK STAGES → CONTENT TYPE NEEDED</Label>
-                  {asArray(perceptionData.stageBreakdown)
-                    .sort((a, b) => a.mentionRate - b.mentionRate)
-                    .map(s => {
-                      const stageConfig = STAGES.find(st => st.label.toLowerCase() === s.stage.toLowerCase());
-                      const isWeak = s.mentionRate < 70;
-                      return (
-                        <div key={s.stage} style={{ padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: isWeak ? T.gold : T.green }}>{s.stage}</span>
-                            <span style={{ fontSize: 16, fontWeight: 800, color: isWeak ? T.gold : T.green, fontFamily: T.m }}>{s.mentionRate}%</span>
-                            {isWeak && stageConfig && (
-                              <span style={{ fontSize: 11, color: T.muted, fontStyle: "italic" }}>Needs: {stageConfig.contentNeeded}</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </Panel>
-
-                {/* Priority Content Gaps → Domain Recommendations */}
-                <Panel glow={T.red} style={{ marginBottom: 16 }}>
-                  <Label color={T.red}>TOP CONTENT GAPS → DOMAIN MATCHES</Label>
-                  <p style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
-                    Content gaps identified by the Perception Monitor, matched to domains that can address them.
-                  </p>
-                  {asArray(perceptionData.allContentGaps).slice(0, 10).map((gap, i) => {
-                    const matchingDoms = enhancedDomains.filter(d =>
-                      (d.matchingGaps || []).includes(gap)
-                    ).slice(0, 3);
-                    return (
-                      <div key={i} style={{ padding: "8px 0", borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                        <div style={{ flex: 1, fontSize: 11, color: T.muted }}>{gap}</div>
-                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                          {matchingDoms.length > 0
-                            ? matchingDoms.map(d => <Chip key={d.id} text={d.domain} color={T.teal} small />)
-                            : <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m }}>No direct match</span>
-                          }
-                        </div>
+                {/* Persona Mention Rate Table */}
+                {(() => {
+                  const pArr = asArray(perceptionData.personaBreakdown).sort((a, b) => a.mentionRate - b.mentionRate);
+                  if (pArr.length === 0) return null;
+                  const piThS = { padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left" };
+                  const piTdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 10, border: `1px solid ${T.accent}15`, overflow: "hidden" }}>
+                      <div style={{ padding: "8px 14px", background: T.accent + "08", borderBottom: `1px solid ${T.border}` }}>
+                        <Label color={T.accent}>PERSONA MENTION RATES</Label>
                       </div>
-                    );
-                  })}
-                </Panel>
+                      <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...piThS }}>PERSONA</th>
+                            <th style={{ ...piThS, width: 70, textAlign: "center" }}>RATE</th>
+                            <th style={{ ...piThS, width: 50, textAlign: "center" }}>QUERIES</th>
+                            <th style={{ ...piThS, width: 70, textAlign: "center" }}>STATUS</th>
+                            <th style={{ ...piThS }}>TOP DOMAINS TO TARGET</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pArr.map((p, idx) => {
+                            const isWeak = p.mentionRate < 70;
+                            const topDoms = enhancedDomains
+                              .filter(d => (d.buyerPersonas || []).includes(p.persona) && d.sirionStatus === "verified_zero")
+                              .sort((a, b) => (b.enhancedPriority || b.priorityScore) - (a.enhancedPriority || a.priorityScore))
+                              .slice(0, 4);
+                            return (
+                              <tr key={p.persona} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                                <td style={{ ...piTdS, fontWeight: 600, color: T.text }}>{p.persona}</td>
+                                <td style={{ ...piTdS, textAlign: "center", fontWeight: 800, fontFamily: T.h, fontSize: 14, color: isWeak ? T.red : T.green }}>{p.mentionRate}%</td>
+                                <td style={{ ...piTdS, textAlign: "center", fontFamily: T.m, color: T.dim }}>{p.total}</td>
+                                <td style={{ ...piTdS, textAlign: "center" }}>
+                                  <span style={{ fontSize: 9, fontWeight: 700, fontFamily: T.m, padding: "2px 6px", borderRadius: 3, background: isWeak ? T.red + "18" : T.green + "18", color: isWeak ? T.red : T.green }}>{isWeak ? "WEAK" : "OK"}</span>
+                                </td>
+                                <td style={{ ...piTdS }}>
+                                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                    {isWeak && topDoms.length > 0
+                                      ? topDoms.map(d => <Chip key={d.id} text={d.domain} color={T.red} small />)
+                                      : <span style={{ fontSize: 10, color: T.dim }}>--</span>
+                                    }
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+
+                {/* Stage Mention Rate Table */}
+                {(() => {
+                  const sArr = asArray(perceptionData.stageBreakdown).sort((a, b) => a.mentionRate - b.mentionRate);
+                  if (sArr.length === 0) return null;
+                  const siThS = { padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left" };
+                  const siTdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 10, border: `1px solid ${T.gold}15`, overflow: "hidden" }}>
+                      <div style={{ padding: "8px 14px", background: T.gold + "08", borderBottom: `1px solid ${T.border}` }}>
+                        <Label color={T.gold}>BUYING STAGE MENTION RATES</Label>
+                      </div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...siThS }}>STAGE</th>
+                            <th style={{ ...siThS, width: 70, textAlign: "center" }}>RATE</th>
+                            <th style={{ ...siThS, width: 70, textAlign: "center" }}>STATUS</th>
+                            <th style={{ ...siThS }}>CONTENT NEEDED</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sArr.map((s, idx) => {
+                            const isWeak = s.mentionRate < 70;
+                            const stageConfig = STAGES.find(st => st.label.toLowerCase() === s.stage.toLowerCase());
+                            return (
+                              <tr key={s.stage} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                                <td style={{ ...siTdS, fontWeight: 600, color: T.text }}>{s.stage}</td>
+                                <td style={{ ...siTdS, textAlign: "center", fontWeight: 800, fontFamily: T.h, fontSize: 14, color: isWeak ? T.gold : T.green }}>{s.mentionRate}%</td>
+                                <td style={{ ...siTdS, textAlign: "center" }}>
+                                  <span style={{ fontSize: 9, fontWeight: 700, fontFamily: T.m, padding: "2px 6px", borderRadius: 3, background: isWeak ? T.gold + "18" : T.green + "18", color: isWeak ? T.gold : T.green }}>{isWeak ? "WEAK" : "OK"}</span>
+                                </td>
+                                <td style={{ ...siTdS, fontSize: 10, color: T.muted }}>{isWeak && stageConfig ? stageConfig.contentNeeded : "--"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+
+                {/* Content Gaps Table */}
+                {(() => {
+                  const gaps = asArray(perceptionData.allContentGaps).slice(0, 15);
+                  if (gaps.length === 0) return null;
+                  const gThS = { padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left" };
+                  const gTdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 10, border: `1px solid ${T.red}15`, overflow: "hidden" }}>
+                      <div style={{ padding: "8px 14px", background: T.red + "08", borderBottom: `1px solid ${T.border}` }}>
+                        <Label color={T.red}>CONTENT GAPS → DOMAIN MATCHES</Label>
+                      </div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...gThS, width: 24, textAlign: "center" }}>#</th>
+                            <th style={{ ...gThS }}>GAP DESCRIPTION</th>
+                            <th style={{ ...gThS, minWidth: 160 }}>MATCHING DOMAINS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {gaps.map((gap, i) => {
+                            const matchingDoms = enhancedDomains.filter(d => (d.matchingGaps || []).includes(gap)).slice(0, 3);
+                            return (
+                              <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                                <td style={{ ...gTdS, textAlign: "center", fontFamily: T.m, color: T.dim, fontSize: 10 }}>{i + 1}</td>
+                                <td style={{ ...gTdS, color: T.muted, fontSize: 11 }}>{gap}</td>
+                                <td style={{ ...gTdS }}>
+                                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                    {matchingDoms.length > 0
+                                      ? matchingDoms.map(d => <Chip key={d.id} text={d.domain} color={T.teal} small />)
+                                      : <span style={{ fontSize: 10, color: T.dim, fontFamily: T.m }}>No match</span>
+                                    }
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
 
                 {/* Re-prioritized Domain List */}
                 <Panel style={{ marginBottom: 16 }}>
@@ -978,146 +1081,310 @@ export default function AuthorityRing() {
         {/* ═══ TAB: OUTREACH PLAN ═══ */}
         {nav === "outreach" && (
           <>
-            <Label color={T.accent}>OUTREACH EXECUTION PLAN</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16 }}>Prioritized by impact. Grouped by execution method so you can batch similar outreach together.</p>
+            <Label color={T.accent}>OUTREACH PROJECT TRACKER</Label>
+            <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Track outreach execution per domain. Status changes persist to Firebase automatically.</p>
 
-            {Object.entries(OUTREACH_METHODS).map(([key, method]) => {
-              const matchingDomains = DOMAINS.filter(d => method.domains.includes(d.id));
-              if (matchingDomains.length === 0) return null;
+            {/* Status Summary + Filters */}
+            {(() => {
+              const allZeros = DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore);
+              const statusCounts = { NOT_STARTED: 0, IN_PROGRESS: 0, DONE: 0, BLOCKED: 0 };
+              allZeros.forEach(d => { const s = outreachTracker[d.id]?.status || "NOT_STARTED"; statusCounts[s]++; });
+              const statusColors = { NOT_STARTED: T.dim, IN_PROGRESS: T.blue, DONE: T.green, BLOCKED: T.red };
+              const statusLabels = { NOT_STARTED: "Not Started", IN_PROGRESS: "In Progress", DONE: "Done", BLOCKED: "Blocked" };
+              const filteredOutreach = outreachFilter === "all" ? allZeros
+                : outreachFilter === "quick_wins" ? allZeros.filter(d => d.fiverr || d.difficulty === "easy")
+                : outreachFilter === "high_impact" ? allZeros.filter(d => d.priorityScore >= 85)
+                : allZeros.filter(d => (outreachTracker[d.id]?.status || "NOT_STARTED") === "BLOCKED");
+
+              const thS = { padding: "8px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left", whiteSpace: "nowrap", position: "sticky", top: 0, background: T.bg, zIndex: 2 };
+              const tdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+              const selS = { fontSize: 10, fontFamily: T.m, background: T.surface, border: `1px solid ${T.border}`, color: T.text, borderRadius: 4, padding: "3px 6px", cursor: "pointer" };
+
               return (
-                <div key={key} style={{ marginBottom: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{method.label}</span>
-                    <span style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>{method.costRange}</span>
-                    <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>{method.timeline}</span>
-                    <Chip text={method.quality.toUpperCase()} color={method.quality.includes("high") ? T.green : T.gold} small />
+                <>
+                  {/* Summary Cards */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+                    {Object.entries(statusCounts).map(([key, count]) => (
+                      <Panel key={key} glow={statusColors[key]} style={{ padding: "10px 14px", textAlign: "center" }}>
+                        <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: statusColors[key] }}>{count}</div>
+                        <div style={{ fontSize: 9, fontFamily: T.m, color: statusColors[key], letterSpacing: "0.08em", marginTop: 2 }}>{statusLabels[key].toUpperCase()}</div>
+                      </Panel>
+                    ))}
                   </div>
-                  {matchingDomains.sort((a, b) => b.priorityScore - a.priorityScore).map(d => (
-                    <Panel key={d.id} style={{ padding: "10px 14px", marginBottom: 4 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, fontFamily: T.m, color: d.priorityScore >= 90 ? T.red : T.text }}>{d.priorityScore}</span>
-                          <span style={{ fontSize: 11, fontWeight: 600 }}>{d.domain}</span>
-                          <StatusBadge status={d.sirionStatus} />
-                        </div>
-                        <div style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>${(d.estCostLow/1000).toFixed(1)}K–${(d.estCostHigh/1000).toFixed(1)}K</div>
-                      </div>
-                      <p style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>{d.method}</p>
-                    </Panel>
-                  ))}
-                </div>
+
+                  {/* Filter Buttons */}
+                  <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center" }}>
+                    {[{ id: "all", label: "All Targets" }, { id: "quick_wins", label: "Quick Wins" }, { id: "high_impact", label: "High Impact" }, { id: "blocked", label: "Blocked" }].map(f => (
+                      <button key={f.id} onClick={() => setOutreachFilter(f.id)}
+                        style={{ padding: "4px 10px", fontSize: 11, fontFamily: T.m, color: outreachFilter === f.id ? T.text : T.dim, background: outreachFilter === f.id ? T.accentDim : "transparent", border: `1px solid ${outreachFilter === f.id ? T.borderActive : T.border}`, borderRadius: 6, cursor: "pointer" }}>
+                        {f.label}
+                      </button>
+                    ))}
+                    <span style={{ fontSize: 11, color: T.dim, fontFamily: T.m, marginLeft: 8 }}>{filteredOutreach.length} domains</span>
+                  </div>
+
+                  {/* Outreach Table */}
+                  <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "hidden", background: T.surface }}>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 850 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...thS, width: 50, textAlign: "center" }}>SCORE</th>
+                            <th style={{ ...thS, minWidth: 110 }}>DOMAIN</th>
+                            <th style={{ ...thS, minWidth: 160 }}>ACTION</th>
+                            <th style={{ ...thS, width: 100, textAlign: "center" }}>STATUS</th>
+                            <th style={{ ...thS, width: 90 }}>METHOD</th>
+                            <th style={{ ...thS, width: 80, textAlign: "right" }}>COST</th>
+                            <th style={{ ...thS, width: 65, textAlign: "center" }}>DIFF</th>
+                            <th style={{ ...thS, width: 80 }}>TIMELINE</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredOutreach.map((d, idx) => {
+                            const tracker = outreachTracker[d.id] || {};
+                            const st = tracker.status || "NOT_STARTED";
+                            const outreachEntry = Object.values(OUTREACH_METHODS).find(m => m.domains.includes(d.id));
+                            return (
+                              <tr key={d.id} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                                <td style={{ ...tdS, textAlign: "center", fontFamily: T.h, fontWeight: 800, fontSize: 13, color: d.priorityScore >= 90 ? T.red : d.priorityScore >= 75 ? T.gold : T.dim }}>{d.priorityScore}</td>
+                                <td style={{ ...tdS, fontWeight: 600, color: T.text }}>
+                                  {d.domain}
+                                  {d.fiverr && <span style={{ marginLeft: 6, fontSize: 8, fontWeight: 700, fontFamily: T.m, color: T.blue, background: T.blue + "18", padding: "1px 5px", borderRadius: 3 }}>FIVERR</span>}
+                                </td>
+                                <td style={{ ...tdS, fontSize: 10, color: T.accent }}>{d.approach || d.method?.split(".")[0] || "--"}</td>
+                                <td style={{ ...tdS, textAlign: "center" }}>
+                                  <select value={st} onChange={e => updateOutreachStatus(d.id, "status", e.target.value)}
+                                    style={{ ...selS, color: statusColors[st], borderColor: statusColors[st] + "40" }}>
+                                    <option value="NOT_STARTED">Not Started</option>
+                                    <option value="IN_PROGRESS">In Progress</option>
+                                    <option value="DONE">Done</option>
+                                    <option value="BLOCKED">Blocked</option>
+                                  </select>
+                                </td>
+                                <td style={{ ...tdS, fontSize: 9, color: T.muted }}>{outreachEntry?.label || d.difficulty}</td>
+                                <td style={{ ...tdS, textAlign: "right", fontFamily: T.m, fontSize: 10 }}>${(d.estCostLow/1000).toFixed(1)}K-${(d.estCostHigh/1000).toFixed(1)}K</td>
+                                <td style={{ ...tdS, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                                <td style={{ ...tdS, fontSize: 10, color: T.dim, fontFamily: T.m }}>{outreachEntry?.timeline || "--"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
               );
-            })}
+            })()}
           </>
         )}
 
         {/* ═══ TAB: COST MODEL ═══ */}
-        {nav === "cost" && (
+        {nav === "cost" && (() => {
+          const cmThS = { padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left", whiteSpace: "nowrap" };
+          const cmTdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+          const retainerItems = [
+            { service: "Authority Ring Intelligence", cost: "$2,000–$3,000", freq: "Monthly", desc: "Competitor backlink research, gap identification, domain verification" },
+            { service: "AI Perception Monitoring", cost: "$1,500–$2,500", freq: "Monthly", desc: "Track ChatGPT/Gemini/Claude responses to buyer questions" },
+            { service: "Question Bank Refresh", cost: "$500", freq: "Quarterly", desc: "Persona-driven question generation, not keyword-based" },
+            { service: "Narrative Audit", cost: "$500", freq: "Quarterly", desc: "Flag content reinforcing post-signature bias" },
+          ];
+          const placementTiers = [
+            { tier: "Quick Wins (Fiverr/Self-Publish)", count: stats.fiverrable, costEach: "$0–$500", total: `$0–$${(stats.fiverrable * 500).toLocaleString()}` },
+            { tier: "Medium (PR/Sponsored)", count: DOMAINS.filter(d => d.difficulty === "medium" && d.sirionStatus === "verified_zero").length, costEach: "$2,500–$8,000", total: "$10K–$32K" },
+            { tier: "High-Impact (HBR/Forbes/Bloomberg)", count: 3, costEach: "$5,000–$25,000", total: "$15K–$75K" },
+            { tier: "Partner Co-Creation", count: DOMAINS.filter(d => d.category?.includes("Partner") || d.category?.includes("Big 4")).length, costEach: "$2,000–$12,000", total: "$12K–$72K" },
+          ];
+          const zeroDomains = DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore);
+          return (
           <>
             <Label color={T.accent}>COST MODEL — XTRUSIO RETAINER vs OUTREACH SPEND</Label>
             <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>
               Two separate line items: (1) Xtrusio software retainer for research, monitoring & strategy. (2) Actual outreach/placement spend per domain.
             </p>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
-              <Panel glow={T.accent} style={{ borderLeft: `3px solid ${T.accent}` }}>
-                <Label color={T.accent}>XTRUSIO RETAINER (MONTHLY)</Label>
-                <div style={{ marginBottom: 12 }}>
-                  {[
-                    { service: "Authority Ring Intelligence", cost: "$2,000–$3,000", desc: "Competitor backlink research, gap identification, domain verification" },
-                    { service: "AI Perception Monitoring", cost: "$1,500–$2,500", desc: "Track ChatGPT/Gemini/Claude responses to buyer questions" },
-                    { service: "Question Bank Refresh", cost: "$500/quarter", desc: "Persona-driven question generation, not keyword-based" },
-                    { service: "Narrative Audit", cost: "$500/quarter", desc: "Flag content reinforcing post-signature bias" },
-                  ].map((s, i) => (
-                    <div key={i} style={{ padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 11, fontWeight: 600 }}>{s.service}</span>
-                        <span style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>{s.cost}</span>
-                      </div>
-                      <p style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>{s.desc}</p>
-                    </div>
-                  ))}
+            {/* Summary Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 20 }}>
+              {[
+                { label: "MONTHLY RETAINER", value: "$4,000–$6,000", color: T.accent, sub: "Annual: $48K–$72K" },
+                { label: "PLACEMENT BUDGET", value: "$37K–$179K", color: T.teal, sub: "Phased over 6-12 months" },
+                { label: "TOTAL ANNUAL", value: "$85K–$251K", color: T.gold, sub: `${zeroDomains.length} zero-presence targets` },
+              ].map(c => (
+                <div key={c.label} style={{ background: T.surface, borderRadius: 8, padding: "14px 16px", border: `1px solid ${T.border}`, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, fontFamily: T.m, letterSpacing: "0.1em", color: T.dim, marginBottom: 6 }}>{c.label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: c.color }}>{c.value}</div>
+                  <div style={{ fontSize: 10, color: T.dim, fontFamily: T.m, marginTop: 4 }}>{c.sub}</div>
                 </div>
-                <div style={{ padding: "10px 0", borderTop: `2px solid ${T.accent}33` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.h }}>Monthly Retainer</span>
-                    <span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.h, color: T.accent }}>$4,000–$6,000</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-                    <span style={{ fontSize: 11, color: T.dim }}>Annual</span>
-                    <span style={{ fontSize: 11, fontFamily: T.m, color: T.accent }}>$48K–$72K</span>
-                  </div>
-                </div>
-              </Panel>
-
-              <Panel glow={T.teal} style={{ borderLeft: `3px solid ${T.teal}` }}>
-                <Label color={T.teal}>OUTREACH PLACEMENT SPEND</Label>
-                <div style={{ marginBottom: 12 }}>
-                  {[
-                    { tier: "Quick Wins (Fiverr/Self-Publish)", count: stats.fiverrable, costRange: "$0–$500 each", total: `$0–$${(stats.fiverrable * 500).toLocaleString()}` },
-                    { tier: "Medium (PR/Sponsored)", count: DOMAINS.filter(d => d.difficulty === "medium" && d.sirionStatus === "verified_zero").length, costRange: "$2,500–$8,000 each", total: "$10K–$32K" },
-                    { tier: "High-Impact (HBR/Forbes/Bloomberg)", count: 3, costRange: "$5,000–$25,000 each", total: "$15K–$75K" },
-                    { tier: "Partner Co-Creation", count: DOMAINS.filter(d => d.category?.includes("Partner") || d.category?.includes("Big 4")).length, costRange: "$2,000–$12,000 each", total: "$12K–$72K" },
-                  ].map((t, i) => (
-                    <div key={i} style={{ padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 11, fontWeight: 600 }}>{t.tier}</span>
-                        <span style={{ fontSize: 11, fontFamily: T.m, color: T.teal }}>{t.total}</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>{t.count} domains · {t.costRange}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ padding: "10px 0", borderTop: `2px solid ${T.teal}33` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.h }}>Total Placement Budget</span>
-                    <span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.h, color: T.teal }}>$37K–$179K</span>
-                  </div>
-                  <p style={{ fontSize: 11, color: T.dim, marginTop: 4 }}>Phased over 6-12 months. Not all at once. Quick wins first.</p>
-                </div>
-              </Panel>
+              ))}
             </div>
 
-            {/* Bar Chart — Cost by Domain */}
-            <Label color={T.dim}>COST BY DOMAIN (ZERO-PRESENCE TARGETS)</Label>
-            <Panel style={{ padding: "14px", marginBottom: 16 }}>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 12).map(d => ({ name: d.domain.replace(".com", "").replace(".org", ""), low: d.estCostLow / 1000, high: (d.estCostHigh - d.estCostLow) / 1000, priority: d.priorityScore }))} margin={{ top: 5, right: 5, bottom: 40, left: 5 }}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: T.dim, fontFamily: T.m }} angle={-35} textAnchor="end" />
-                  <YAxis tick={{ fontSize: 11, fill: T.dim, fontFamily: T.m }} tickFormatter={v => `$${v}K`} />
-                  <Tooltip contentStyle={tipStyle} formatter={(v) => `$${v.toFixed(1)}K`} />
-                  <Bar dataKey="low" stackId="cost" fill={T.accent} radius={[0, 0, 0, 0]} name="Base Cost" />
-                  <Bar dataKey="high" stackId="cost" fill="rgba(167,139,250,0.3)" radius={[4, 4, 0, 0]} name="Upper Range" />
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
+            {/* Retainer Table */}
+            <Label color={T.accent}>XTRUSIO RETAINER SERVICES</Label>
+            <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "hidden", marginBottom: 20 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...cmThS }}>SERVICE</th>
+                    <th style={{ ...cmThS }}>DESCRIPTION</th>
+                    <th style={{ ...cmThS, width: 80, textAlign: "center" }}>FREQUENCY</th>
+                    <th style={{ ...cmThS, width: 120, textAlign: "right" }}>COST</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retainerItems.map((s, i) => (
+                    <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                      <td style={{ ...cmTdS, fontWeight: 600, color: T.text }}>{s.service}</td>
+                      <td style={{ ...cmTdS, fontSize: 10, color: T.muted }}>{s.desc}</td>
+                      <td style={{ ...cmTdS, textAlign: "center", fontSize: 10, fontFamily: T.m, color: T.dim }}>{s.freq}</td>
+                      <td style={{ ...cmTdS, textAlign: "right", fontFamily: T.m, fontWeight: 700, color: T.accent }}>{s.cost}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ background: T.accent + "08" }}>
+                    <td colSpan={3} style={{ ...cmTdS, fontWeight: 800, fontFamily: T.h, borderBottom: "none" }}>MONTHLY TOTAL</td>
+                    <td style={{ ...cmTdS, textAlign: "right", fontWeight: 800, fontFamily: T.h, color: T.accent, fontSize: 13, borderBottom: "none" }}>$4,000–$6,000</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Placement Spend Table */}
+            <Label color={T.teal}>OUTREACH PLACEMENT SPEND</Label>
+            <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "hidden", marginBottom: 20 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...cmThS }}>TIER</th>
+                    <th style={{ ...cmThS, width: 70, textAlign: "center" }}>DOMAINS</th>
+                    <th style={{ ...cmThS, width: 120, textAlign: "right" }}>COST / EACH</th>
+                    <th style={{ ...cmThS, width: 120, textAlign: "right" }}>TOTAL RANGE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {placementTiers.map((t, i) => (
+                    <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                      <td style={{ ...cmTdS, fontWeight: 600, color: T.text }}>{t.tier}</td>
+                      <td style={{ ...cmTdS, textAlign: "center", fontFamily: T.m, fontWeight: 700 }}>{t.count}</td>
+                      <td style={{ ...cmTdS, textAlign: "right", fontFamily: T.m, color: T.dim }}>{t.costEach}</td>
+                      <td style={{ ...cmTdS, textAlign: "right", fontFamily: T.m, fontWeight: 700, color: T.teal }}>{t.total}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ background: T.teal + "08" }}>
+                    <td colSpan={3} style={{ ...cmTdS, fontWeight: 800, fontFamily: T.h, borderBottom: "none" }}>TOTAL PLACEMENT BUDGET</td>
+                    <td style={{ ...cmTdS, textAlign: "right", fontWeight: 800, fontFamily: T.h, color: T.teal, fontSize: 13, borderBottom: "none" }}>$37K–$179K</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Per-Domain Cost Table */}
+            <Label color={T.dim}>COST BY DOMAIN — ZERO-PRESENCE TARGETS ({zeroDomains.length})</Label>
+            <p style={{ fontSize: 10, color: T.dim, marginBottom: 8 }}>Sorted by priority score. These are domains where Sirion has zero presence and needs placement.</p>
+            <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "auto", marginBottom: 16 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface, minWidth: 700 }}>
+                <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                  <tr>
+                    <th style={{ ...cmThS, width: 55, textAlign: "center" }}>SCORE</th>
+                    <th style={{ ...cmThS }}>DOMAIN</th>
+                    <th style={{ ...cmThS, width: 44, textAlign: "center" }}>DA</th>
+                    <th style={{ ...cmThS }}>CATEGORY</th>
+                    <th style={{ ...cmThS }}>METHOD</th>
+                    <th style={{ ...cmThS, width: 120, textAlign: "right" }}>COST RANGE</th>
+                    <th style={{ ...cmThS, width: 65, textAlign: "center" }}>DIFF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {zeroDomains.map((d, idx) => (
+                    <tr key={d.id} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                      <td style={{ ...cmTdS, textAlign: "center", fontFamily: T.h, fontWeight: 800, color: d.priorityScore >= 90 ? T.red : d.priorityScore >= 75 ? T.gold : T.dim }}>{d.priorityScore}</td>
+                      <td style={{ ...cmTdS, fontWeight: 600, color: T.text }}>
+                        {d.domain}
+                        {d.fiverrFriendly && <span style={{ marginLeft: 6, fontSize: 8, padding: "1px 5px", borderRadius: 3, background: T.green + "22", color: T.green, fontFamily: T.m, fontWeight: 700 }}>FIVERR</span>}
+                      </td>
+                      <td style={{ ...cmTdS, textAlign: "center", fontFamily: T.m, fontWeight: 600, color: d.da >= 85 ? T.green : T.muted }}>{d.da}</td>
+                      <td style={{ ...cmTdS, fontSize: 10, color: T.muted }}>{d.category}</td>
+                      <td style={{ ...cmTdS, fontSize: 10, color: T.accent }}>{d.approach || "--"}</td>
+                      <td style={{ ...cmTdS, textAlign: "right", fontFamily: T.m, fontWeight: 600, color: T.text }}>${(d.estCostLow / 1000).toFixed(1)}K–${(d.estCostHigh / 1000).toFixed(1)}K</td>
+                      <td style={{ ...cmTdS, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
-        )}
+          );
+        })()}
 
         {/* ═══ TAB: PERSONA MAP ═══ */}
         {nav === "persona" && (
           <>
             <Label color={T.accent}>BUYER PERSONA → DOMAIN INFLUENCE MAP</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16 }}>Which domains matter most for each decision-maker. Used to prioritize outreach by target persona.</p>
+            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16 }}>Which domains matter most for each decision-maker. Coverage = % of persona-relevant domains where Sirion has presence.</p>
 
-            {PERSONAS.map(p => (
-              <Panel key={p.id} style={{ marginBottom: 12, padding: "14px 18px" }} glow={p.color}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontSize: 18 }}>{p.icon}</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: p.color, fontFamily: T.h }}>{p.label}</span>
-                  <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>({p.id})</span>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {DOMAINS.filter(d => d.buyerPersonas?.includes(p.id)).sort((a, b) => b.priorityScore - a.priorityScore).map(d => (
-                    <div key={d.id} style={{ padding: "6px 10px", background: T.surface, borderRadius: 8, border: `1px solid ${d.sirionStatus === "verified_zero" ? "rgba(248,113,113,0.15)" : d.sirionStatus === "verified_present" ? "rgba(251,191,36,0.15)" : "rgba(52,211,153,0.15)"}`, fontSize: 11 }}>
-                      <span style={{ fontWeight: 600 }}>{d.domain}</span>
-                      <span style={{ marginLeft: 6 }}><StatusBadge status={d.sirionStatus} /></span>
+            {/* Summary Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${PERSONAS.length}, 1fr)`, gap: 10, marginBottom: 20 }}>
+              {PERSONAS.map(p => {
+                const doms = DOMAINS.filter(d => d.buyerPersonas?.includes(p.id));
+                const present = doms.filter(d => d.sirionStatus !== "verified_zero").length;
+                const pct = doms.length ? Math.round((present / doms.length) * 100) : 0;
+                return (
+                  <Panel key={p.id} glow={p.color} style={{ padding: "12px 14px", textAlign: "center" }}>
+                    <div style={{ fontSize: 16, marginBottom: 4 }}>{p.icon}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: p.color, fontFamily: T.h, marginBottom: 2 }}>{p.id}</div>
+                    <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginBottom: 8 }}>{p.label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 900, fontFamily: T.h, color: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red }}>{pct}%</div>
+                    <div style={{ height: 4, borderRadius: 2, background: T.border, marginTop: 6, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, borderRadius: 2, background: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red, transition: "width 0.3s" }} />
                     </div>
-                  ))}
+                    <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 4 }}>{present}/{doms.length} domains covered</div>
+                  </Panel>
+                );
+              })}
+            </div>
+
+            {/* Per-Persona Domain Tables */}
+            {PERSONAS.map(p => {
+              const doms = DOMAINS.filter(d => d.buyerPersonas?.includes(p.id)).sort((a, b) => b.priorityScore - a.priorityScore);
+              const present = doms.filter(d => d.sirionStatus !== "verified_zero").length;
+              const pct = doms.length ? Math.round((present / doms.length) * 100) : 0;
+              const thS = { padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: "left", whiteSpace: "nowrap" };
+              const tdS = { padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+              return (
+                <div key={p.id} style={{ marginBottom: 16, borderRadius: 10, border: `1px solid ${p.color}15`, overflow: "hidden" }}>
+                  <div style={{ padding: "10px 16px", background: p.color + "08", display: "flex", alignItems: "center", gap: 10, borderBottom: `1px solid ${T.border}` }}>
+                    <span style={{ fontSize: 16 }}>{p.icon}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: p.color, fontFamily: T.h }}>{p.label}</span>
+                    <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>({p.id})</span>
+                    <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: T.m, fontWeight: 700, color: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red }}>{pct}% coverage</span>
+                    <span style={{ fontSize: 10, fontFamily: T.m, color: T.dim }}>{present}/{doms.length}</span>
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thS }}>DOMAIN</th>
+                        <th style={{ ...thS, width: 70, textAlign: "center" }}>STATUS</th>
+                        <th style={{ ...thS, width: 44, textAlign: "center" }}>DA</th>
+                        <th style={{ ...thS, width: 55, textAlign: "center" }}>SCORE</th>
+                        <th style={{ ...thS }}>CATEGORY</th>
+                        <th style={{ ...thS }}>CONTENT NEEDED</th>
+                        <th style={{ ...thS, width: 65, textAlign: "center" }}>DIFF</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {doms.map((d, idx) => (
+                        <tr key={d.id} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                          <td style={{ ...tdS, fontWeight: 600, color: T.text }}>{d.domain}</td>
+                          <td style={{ ...tdS, textAlign: "center" }}><StatusBadge status={d.sirionStatus} /></td>
+                          <td style={{ ...tdS, textAlign: "center", fontFamily: T.m, fontWeight: 600, color: d.da >= 85 ? T.green : T.muted }}>{d.da}</td>
+                          <td style={{ ...tdS, textAlign: "center", fontFamily: T.h, fontWeight: 800, color: d.priorityScore >= 90 ? T.red : d.priorityScore >= 75 ? T.gold : T.dim }}>{d.priorityScore}</td>
+                          <td style={{ ...tdS, fontSize: 10, color: T.muted }}>{d.category}</td>
+                          <td style={{ ...tdS, fontSize: 10, color: T.accent }}>{d.approach || "--"}</td>
+                          <td style={{ ...tdS, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </Panel>
-            ))}
+              );
+            })}
           </>
         )}
       </div>
