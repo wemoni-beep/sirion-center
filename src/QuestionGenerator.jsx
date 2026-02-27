@@ -1310,7 +1310,9 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
 
   // ── Export to M2 ──
   const exportToM2 = () => {
-    const exportQs = filtered.filter(q => selectedQs.has(q.id)).map(q => ({
+    // Export ALL questions from the bank (ignoring filters/selection)
+    // so the pipeline always reflects the full question count
+    const exportQs = questions.map(q => ({
       id: q.id,
       persona: PERSONAS.find(p => p.id === q.persona)?.label || q.persona,
       stage: q.stage,
@@ -1916,7 +1918,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   M1 {"\u2192"} M2 BRIDGE
                 </div>
                 <div style={{ fontSize: 13, color: t.textSec, lineHeight: 1.7 }}>
-                  Click <strong style={{ color: t.text }}>Export to M2</strong> to send {selectedQs.size} selected questions to the Perception Monitor.
+                  Click <strong style={{ color: t.text }}>Export to M2</strong> to send all {questions.length} questions to the Perception Monitor.
                   The monitor will test each question across ChatGPT, Gemini, and Claude to measure AI visibility.
                   {sourceCounts.ai > 0 && (
                     <span style={{ color: t.brand }}> Includes {sourceCounts.ai} AI-researched questions.</span>
