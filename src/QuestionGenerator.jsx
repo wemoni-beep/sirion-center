@@ -515,9 +515,10 @@ export default function QuestionGenerator({ onNavigate }) {
     }
   }, [personaProfiles]);
 
-  // ── Merged questions (static + KB + AI) with deduplication ──
-  // Always includes ALL questions regardless of persona/cluster selection
-  // so the database count stays consistent (138) everywhere.
+  // ── Merged questions (static + KB + AI + pipeline) with deduplication ──
+  // Pipeline questions (from Firebase) are the source of truth for the full count.
+  // This ensures the database always shows the complete set (e.g. 138).
+  const pipelineQuestions = pipeline.m1.questions || [];
   const questions = useMemo(() => {
     if (!generated) return [];
     const seen = new Set();
@@ -541,12 +542,24 @@ export default function QuestionGenerator({ onNavigate }) {
     kbQuestions
       .forEach(q => addQ({ ...q, source: q.source === "persona-research" ? "persona-research" : "kb" }));
 
-    // Tier 3: Fresh AI questions
+    // Tier 3: Fresh AI questions (generated in current session)
     aiQuestions
       .forEach(q => addQ(q));
 
+    // Tier 4: Pipeline questions from Firebase (catches AI questions from previous sessions)
+    pipelineQuestions.forEach(q => addQ({
+      id: q.id,
+      query: q.query,
+      persona: q.persona,
+      stage: q.stage,
+      cluster: q.cw || q.cluster,
+      lifecycle: q.lifecycle || "full-stack",
+      source: q.source || "pipeline",
+      classification: q.classification || "macro",
+    }));
+
     return merged;
-  }, [generated, company, aiQuestions, kbQuestions]);
+  }, [generated, company, aiQuestions, kbQuestions, pipelineQuestions]);
 
   const filtered = useMemo(() => {
     return questions.filter(q => {
