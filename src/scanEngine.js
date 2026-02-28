@@ -126,7 +126,7 @@ Respond exactly as you would for any real user asking this question:
 - Do NOT compress or abbreviate your response. Give the full answer a decision maker deserves.
 - Maintain a professional, neutral, and practical tone throughout.`;
 
-const LLM_MAX_TOKENS = 4096; // Enough for a thorough 800-1200 word response
+const LLM_MAX_TOKENS = 2000; // Enough for a thorough 600-800 word response (cost-optimized)
 
 async function askClaude(question, onRetry, timeoutMs = 90000) {
   if (!ANTHROPIC_KEY) return { ok: false, error: "No API key" };
@@ -136,7 +136,7 @@ async function askClaude(question, onRetry, timeoutMs = 90000) {
       method: "POST",
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-5-haiku-20241022",
         max_tokens: LLM_MAX_TOKENS,
         system: DECISION_MAKER_SYSTEM,
         messages: [{ role: "user", content: question }],

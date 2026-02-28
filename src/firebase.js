@@ -101,6 +101,15 @@ const localCache = {
   remove(collection, docId) {
     try { localStorage.removeItem(`${LC_PREFIX}${collection}_${docId}`); } catch {}
   },
+  clearCollection(collection) {
+    const prefix = `${LC_PREFIX}${collection}_`;
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) toRemove.push(key);
+    }
+    toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+  },
   _evict() {
     const entries = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -229,7 +238,8 @@ export const db = {
       const docs = (data.documents || []).map(fromFsDoc).filter(Boolean);
       // Sort client-side by created_at descending
       docs.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-      // Sync to localStorage + file backup
+      // PURGE stale localStorage for this collection, then re-populate with fresh Firebase data
+      localCache.clearCollection(collection);
       docs.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
       return docs;
     } catch (e) {
@@ -315,12 +325,13 @@ export const db = {
         if (!data.nextPageToken) break;
         pageToken = data.nextPageToken;
       }
-      if (all.length > 0) {
-        // Sync to localStorage + file backup
+      if (!fbFailed) {
+        // Firebase succeeded — PURGE stale localStorage, then re-populate with fresh data only
+        localCache.clearCollection(collection);
         all.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
         return all;
       }
-      // Firebase returned empty or failed mid-pagination — try localStorage -> file backup
+      // Firebase failed mid-pagination — try localStorage -> file backup
       if (fbFailed || _lastDbError) {
         const cached = localCache.getAll(collection);
         if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase paginated failed)`); return cached; }

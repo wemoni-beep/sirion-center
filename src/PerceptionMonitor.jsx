@@ -259,6 +259,7 @@ export default function App() {
   // Save status visibility
   const [saveWarnings, setSaveWarnings] = useState([]); // [{msg, ts}]
   const [resumableScan, setResumableScan] = useState(null); // {meta, completedQids}
+  const [hydrating, setHydrating] = useState(true); // true until initial Firebase load completes
 
   // Abort controller for scan cancellation
   const abortRef = useRef(null);
@@ -335,6 +336,8 @@ export default function App() {
             completedCount: completedQids.size,
             totalQueries: pausedOrRunning.totalQueries || 0,
           });
+        } else {
+          setResumableScan(null); // Explicitly clear — no stale resume banner
         }
 
       } catch (e) { console.warn("M2 scan hydration error:", e.message); }
@@ -365,6 +368,7 @@ export default function App() {
         } catch (e) { console.warn("M2 question bank load skipped:", e.message); }
       }
       setQueriesLoaded(true);
+      setHydrating(false);
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -932,7 +936,14 @@ export default function App() {
           {/* ═══ OVERVIEW ═══ */}
           {nav === "overview" && (
             <div style={{ animation: "fadeUp 0.35s ease" }}>
-              {!scanData ? (
+              {hydrating ? (
+                <Card>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "30px 0" }}>
+                    <div style={{ width: 24, height: 24, borderRadius: "50%", border: "3px solid " + T.teal + "40", borderTopColor: T.teal, animation: "spin 0.8s linear infinite" }} />
+                    <span style={{ fontSize: 13, color: T.muted }}>Loading scan data from database...</span>
+                  </div>
+                </Card>
+              ) : !scanData ? (
                 <>
                   <EmptyState icon={"\uD83D\uDD2D"} title="No Scan Data Yet" description="Run your first AI perception scan to see how your company is positioned across AI platforms." action={<Btn primary onClick={() => setNav("scan")}>{"\u26A1"} Go to Run Scan</Btn>} />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
@@ -1215,21 +1226,59 @@ export default function App() {
                 </Card>
               )}
 
-              <Card glow={T.blue}>
-                <Label>RUN AI PERCEPTION SCAN</Label>
-                <div style={{ fontSize: 12, color: T.muted, marginBottom: 12, lineHeight: 1.7 }}>
-                  Fire {queries.length} queries across {allLLMs.length} platforms: {allLLMs.map(id => LLM_META[id]?.name).join(", ")}.
-                  Each question is sent as-is to each AI, then Claude analyzes the response for brand positioning.
-                </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-                  {allLLMs.map(id => <Chip key={id} text={LLM_META[id]?.name} color={LLM_META[id]?.color} />)}
-                  <span style={{ fontSize: 11, color: T.dim, fontFamily: T.fontM }}>~${(queries.length * allLLMs.length * 2 * 0.004).toFixed(2)} credits {"\u00B7"} {queries.length * allLLMs.length * 2} API calls</span>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Btn primary onClick={() => handleRunScan()} disabled={scanning}>{scanning ? "Scanning..." : `\u26A1 Full Scan (${queries.length} \u00D7 ${allLLMs.length})`}</Btn>
-                  <Btn onClick={() => handleRunScan(queries.slice(0, 3))} disabled={scanning}>Quick Test (3 queries)</Btn>
-                </div>
-              </Card>
+              {/* Show completion summary if scan exists, otherwise show the run card */}
+              {scanData && scanData.results && scanData.results.length > 0 && !scanning ? (
+                <Card glow={T.green} style={{ borderLeft: "3px solid " + T.green }}>
+                  <Label>LAST SCAN COMPLETE</Label>
+                  <div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: T.green, fontFamily: T.fontM }}>{scanData.results.length}</div>
+                      <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Queries Scanned</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: T.blue, fontFamily: T.fontM }}>{(scanData.llms || []).length}</div>
+                      <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Platforms</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: T.purple, fontFamily: T.fontM }}>{scanData.scores?.mentionRate || 0}%</div>
+                      <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Mention Rate</div>
+                    </div>
+                    {scanData.date && (
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: T.muted, fontFamily: T.fontM }}>{new Date(scanData.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>
+                        <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Scan Date</div>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+                    {(scanData.llms || []).map(id => <Chip key={id} text={LLM_META[id]?.name} color={LLM_META[id]?.color} />)}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <Btn onClick={() => setNav("overview")}>View Results</Btn>
+                    <Btn onClick={() => handleRunScan()} disabled={scanning} style={{ borderColor: T.orange, color: T.orange }}>{"\u26A1"} Run New Scan ({queries.length} queries)</Btn>
+                    <Btn onClick={() => handleRunScan(queries.slice(0, 3))} disabled={scanning}>Quick Test (3 queries)</Btn>
+                  </div>
+                  <div style={{ fontSize: 10, color: T.dim, marginTop: 8 }}>
+                    ~${(queries.length * 0.006).toFixed(2)} estimated cost for a full rescan
+                  </div>
+                </Card>
+              ) : !scanning && (
+                <Card glow={T.blue}>
+                  <Label>RUN AI PERCEPTION SCAN</Label>
+                  <div style={{ fontSize: 12, color: T.muted, marginBottom: 12, lineHeight: 1.7 }}>
+                    Fire {queries.length} queries across {allLLMs.length} platforms: {allLLMs.map(id => LLM_META[id]?.name).join(", ")}.
+                    Each question is sent as-is to each AI, then Claude analyzes the response for brand positioning.
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+                    {allLLMs.map(id => <Chip key={id} text={LLM_META[id]?.name} color={LLM_META[id]?.color} />)}
+                    <span style={{ fontSize: 11, color: T.dim, fontFamily: T.fontM }}>~${(queries.length * 0.006).toFixed(2)} credits {"\u00B7"} {queries.length + queries.length} API calls ({queries.length} asks + {queries.length} analyses)</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <Btn primary onClick={() => handleRunScan()} disabled={scanning}>{"\u26A1"} Full Scan ({queries.length} {"\u00D7"} {allLLMs.length})</Btn>
+                    <Btn onClick={() => handleRunScan(queries.slice(0, 3))} disabled={scanning}>Quick Test (3 queries)</Btn>
+                  </div>
+                </Card>
+              )}
 
               {/* Query Bank Preview - Table */}
               <Card>
