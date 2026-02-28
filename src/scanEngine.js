@@ -93,7 +93,7 @@ async function fetchWithRetry(url, options, onRetry, timeoutMs = 30000) {
    ─────────────────────────────────────────────── */
 
 const llmLastCall = { claude: 0, gemini: 0, openai: 0, perplexity: 0 };
-const LLM_MIN_GAP = { claude: 1500, gemini: 1100, openai: 500, perplexity: 600 };
+const LLM_MIN_GAP = { claude: 2500, gemini: 1200, openai: 800, perplexity: 800 };
 
 async function throttle(llmId) {
   const now = Date.now();
@@ -509,7 +509,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     const askResults = await Promise.allSettled(askPromises);
     apiCalls += llmIds.length;
 
-    // ── Wave 2: Analyze all successful responses in parallel ──
+    // ── Wave 2: Analyze responses SEQUENTIALLY to avoid rate limiting ──
+    // (Each analysis uses Claude — parallel analysis causes 3 Claude calls at once)
     onProgress?.({
       phase: "analyzing",
       current: qi * llmIds.length + llmIds.length,
@@ -520,8 +521,11 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round(((qi + 0.5) / queries.length) * 70),
     });
 
-    const analyzePromises = llmIds.map((llmId, i) => {
-      const settled = askResults[i];
+    const analyzeResults = [];
+    let successfulAsks = 0;
+    for (let li = 0; li < llmIds.length; li++) {
+      const llmId = llmIds[li];
+      const settled = askResults[li];
       const response = settled.status === "fulfilled" ? settled.value : null;
 
       // If ask failed, skip analyze
@@ -529,50 +533,45 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
         const errMsg = response?.error || settled.reason?.message || "LLM call failed";
         errors.push({ qid: q.id, llm: llmId, error: errMsg });
         partialFailures++;
-        return Promise.resolve({ ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg });
+        analyzeResults.push({ status: "fulfilled", value: { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg } });
+        continue;
       }
+      successfulAsks++;
 
-      // Analyze with Claude
-      return analyzeResponse(q.query, response.text, company, onRetry, 25000)
-        .then(analysis => {
-          analysis.response_snippet = response.text.substring(0, 300);
-          analysis.full_response = response.text;
-          // Merge Perplexity's native citations into cited_sources
-          if (response.citations && response.citations.length > 0) {
-            const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
-            response.citations.forEach(url => {
-              try {
-                const d = new URL(url).hostname.replace(/^www\./, "");
-                if (!existing.has(d)) {
-                  (analysis.cited_sources = analysis.cited_sources || []).push({ domain: d, type: "other", context: "Cited by Perplexity", url });
-                  existing.add(d);
-                }
-              } catch {}
-            });
-          }
-          // Post-analysis fallback: compute citation fields from cited_sources if not returned
-          const sources = analysis.cited_sources || [];
-          if (typeof analysis.citation_presence !== "boolean") {
-            analysis.citation_presence = sources.length > 0;
-          }
-          if (typeof analysis.sirion_content_cited !== "boolean") {
-            analysis.sirion_content_cited = sources.some(s =>
-              /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain)
-            );
-          }
-          return analysis;
-        })
-        .catch(e => {
-          partialFailures++;
-          return { ...ERROR_ANALYSIS, gaps: ["Analysis error: " + e.message], _error: e.message, response_snippet: response.text.substring(0, 250), full_response: response.text };
-        });
-    });
-
-    const analyzeResults = await Promise.allSettled(analyzePromises);
-    apiCalls += llmIds.filter((_, i) => {
-      const settled = askResults[i];
-      return settled.status === "fulfilled" && settled.value?.ok;
-    }).length;
+      try {
+        const analysis = await analyzeResponse(q.query, response.text, company, onRetry, 25000);
+        analysis.response_snippet = response.text.substring(0, 300);
+        analysis.full_response = response.text;
+        // Merge Perplexity's native citations into cited_sources
+        if (response.citations && response.citations.length > 0) {
+          const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
+          response.citations.forEach(url => {
+            try {
+              const d = new URL(url).hostname.replace(/^www\./, "");
+              if (!existing.has(d)) {
+                (analysis.cited_sources = analysis.cited_sources || []).push({ domain: d, type: "other", context: "Cited by Perplexity", url });
+                existing.add(d);
+              }
+            } catch {}
+          });
+        }
+        // Post-analysis fallback: compute citation fields from cited_sources if not returned
+        const sources = analysis.cited_sources || [];
+        if (typeof analysis.citation_presence !== "boolean") {
+          analysis.citation_presence = sources.length > 0;
+        }
+        if (typeof analysis.sirion_content_cited !== "boolean") {
+          analysis.sirion_content_cited = sources.some(s =>
+            /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain)
+          );
+        }
+        analyzeResults.push({ status: "fulfilled", value: analysis });
+      } catch (e) {
+        partialFailures++;
+        analyzeResults.push({ status: "fulfilled", value: { ...ERROR_ANALYSIS, gaps: ["Analysis error: " + e.message], _error: e.message, response_snippet: response.text.substring(0, 250), full_response: response.text } });
+      }
+    }
+    apiCalls += successfulAsks;
 
     // Collect analyses
     llmIds.forEach((llmId, i) => {
@@ -614,9 +613,9 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
     });
 
-    // Cool-down between queries to prevent rate limiting (2s pause)
+    // Cool-down between queries to prevent rate limiting (4s pause)
     if (qi < queries.length - 1) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 4000));
     }
   }
 

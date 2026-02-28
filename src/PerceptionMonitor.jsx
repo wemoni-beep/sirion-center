@@ -657,27 +657,31 @@ export default function App() {
   };
 
   // Run scan — with incremental Firebase persistence
-  const handleRunScan = async (subset) => {
+  // resumeOptions: { scanId, previouslyCompleted } — when resuming an existing scan
+  const handleRunScan = async (subset, resumeOptions) => {
     if (scanning) return;
     const llms = getAvailableLLMs();
     if (llms.length === 0) { setScanError("No LLM API keys configured. Add keys in .env"); return; }
 
     const targetQueries = subset || queries;
     const company = pipeline.m1?.company || "Sirion";
-    const scanId = "scan-" + Date.now();
-    const scanDate = new Date().toISOString();
+    const isResume = !!resumeOptions?.scanId;
+    const scanId = isResume ? resumeOptions.scanId : "scan-" + Date.now();
+    const prevCompleted = isResume ? (resumeOptions.previouslyCompleted || 0) : 0;
+    const scanDate = isResume ? (resumeOptions.scanDate || new Date().toISOString()) : new Date().toISOString();
 
     setScanning(true);
     setScanError("");
     setSaveWarnings([]);
-    setScanProgress({ phase: "starting", percent: 0, status: "Initializing scan..." });
+    setScanProgress({ phase: "starting", percent: 0, status: isResume ? `Resuming scan (${prevCompleted} already done)...` : "Initializing scan..." });
     setNav("scan");
 
-    // 1. Create scan metadata doc FIRST (status: running)
+    // 1. Create or update scan metadata doc (status: running)
     const scanMeta = {
       id: scanId, date: scanDate, status: "running",
       llms, company,
-      totalQueries: targetQueries.length, completedQueries: 0,
+      totalQueries: isResume ? (prevCompleted + targetQueries.length) : targetQueries.length,
+      completedQueries: prevCompleted,
       queryIds: targetQueries.map(q => q.id),
       scores: {}, errors: [], cost: { apiCalls: 0, estimated: 0 },
     };
@@ -705,9 +709,10 @@ export default function App() {
         saveErrors.push(errMsg);
         setSaveWarnings(prev => [...prev, { msg: errMsg, ts: Date.now() }]);
       }
-      // Update metadata progress (non-blocking)
+      // Update metadata progress — offset by previously completed queries on resume
+      const totalCompleted = prevCompleted + index + 1;
       db.saveWithId("m2_scan_meta", scanId, {
-        ...scanMeta, completedQueries: index + 1, status: "running",
+        ...scanMeta, completedQueries: totalCompleted, status: "running",
       }).catch(() => {});
     };
 
@@ -719,6 +724,26 @@ export default function App() {
       // Override scan ID to match our pre-created metadata
       result.id = scanId;
       result.date = scanDate;
+
+      // If resuming, merge previously completed results with new results
+      if (isResume && prevCompleted > 0) {
+        try {
+          let prevResults = await db.getAllPaginated("m2_scan_results");
+          prevResults = prevResults.filter(r => {
+            const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+            return sid === scanId;
+          });
+          // Merge: old results + new results (dedup by qid)
+          const newQids = new Set(result.results.map(r => r.qid));
+          const oldOnly = prevResults.filter(r => !newQids.has(r.qid));
+          result.results = [...oldOnly, ...result.results];
+          result.count = result.results.length;
+          // Recompute scores with full result set
+          console.log(`Resume merge: ${oldOnly.length} old + ${newQids.size} new = ${result.results.length} total results`);
+        } catch (mergeErr) {
+          console.warn("Could not merge old results on resume:", mergeErr.message);
+        }
+      }
 
       // 3. Save stripped full scan as single doc (for fast hydration)
       const strippedScan = {
@@ -741,7 +766,7 @@ export default function App() {
       // 4. Mark scan complete in metadata
       const completeMeta = {
         ...scanMeta, status: "complete",
-        completedQueries: result.results.length,
+        completedQueries: prevCompleted + result.results.length,
         scores: result.scores,
         errors: result.errors,
         cost: result.cost,
@@ -1132,24 +1157,37 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8 }}>
                     <Btn primary onClick={async () => {
                       // Guard: re-read Firebase to get latest completed count before resuming
+                      const originalScanId = resumableScan.meta.id;
+                      const originalDate = resumableScan.meta.date;
                       try {
                         let fbResults = [];
                         try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
                         const freshCompleted = fbResults.filter(r => {
                           const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
-                          return sid === resumableScan.meta.id;
+                          return sid === originalScanId;
                         });
                         const freshQids = new Set(freshCompleted.map(r => r.qid));
                         const remaining = queries.filter(q => !freshQids.has(q.id));
                         if (remaining.length > 0) {
-                          handleRunScan(remaining);
+                          // Resume with SAME scanId — new results accumulate under original scan
+                          handleRunScan(remaining, {
+                            scanId: originalScanId,
+                            scanDate: originalDate,
+                            previouslyCompleted: freshQids.size,
+                          });
                         } else {
                           setScanError("All queries already completed in previous scan.");
                         }
                       } catch (e) {
                         // Fallback to cached state if Firebase read fails
                         const remaining = queries.filter(q => !resumableScan.completedQids.has(q.id));
-                        if (remaining.length > 0) handleRunScan(remaining);
+                        if (remaining.length > 0) {
+                          handleRunScan(remaining, {
+                            scanId: originalScanId,
+                            scanDate: originalDate,
+                            previouslyCompleted: resumableScan.completedCount,
+                          });
+                        }
                       }
                       setResumableScan(null);
                     }}>Resume Scan ({resumableScan.totalQueries - resumableScan.completedCount} remaining)</Btn>
