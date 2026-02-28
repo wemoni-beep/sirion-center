@@ -347,20 +347,31 @@ Rules:
 - "content_gaps" = what content could the company publish to improve this response
 - If company not mentioned at all, set mentioned=false, rank=null, sentiment="absent"`;
 
-async function analyzeResponse(question, llmResponse, company, onRetry, timeoutMs = 25000) {
+/**
+ * Batch-analyze ALL LLM responses in ONE Claude call.
+ * This cuts Claude API calls from 3-per-query to 1-per-query (50% total reduction).
+ * Uses Haiku for speed — structured JSON extraction doesn't need Sonnet.
+ */
+async function analyzeBatch(question, responses, company, onRetry, timeoutMs = 45000) {
   if (!ANTHROPIC_KEY) throw new Error("Claude API needed for analysis");
+
+  // Build combined prompt with all successful responses
+  const responseSections = Object.entries(responses)
+    .map(([llmId, resp]) => `=== ${llmId.toUpperCase()} RESPONSE ===\n"""${resp.substring(0, 5000)}"""`)
+    .join("\n\n");
+
+  const llmKeys = Object.keys(responses);
 
   const userMsg = `TARGET COMPANY: ${company}
 
 BUYER-INTENT QUESTION:
 "${question}"
 
-AI PLATFORM RESPONSE:
-"""
-${llmResponse.substring(0, 6000)}
-"""
+${responseSections}
 
-Analyze this response for ${company}'s AI perception. Return JSON only.`;
+Analyze EACH response separately for ${company}'s AI perception.
+Return a JSON object with keys: ${llmKeys.map(k => `"${k}"`).join(", ")}
+Each value must follow the analysis schema. Return JSON only.`;
 
   try {
     await throttle("claude");
@@ -368,9 +379,9 @@ Analyze this response for ${company}'s AI perception. Return JSON only.`;
       method: "POST",
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2000,
-        system: ANALYSIS_SYSTEM,
+        model: "claude-3-5-haiku-20241022",
+        max_tokens: 4096,
+        system: ANALYSIS_SYSTEM + `\n\nIMPORTANT: You are analyzing MULTIPLE responses at once. Return a JSON object where each key is an LLM name (${llmKeys.join(", ")}) and each value is the full analysis object following the schema above. Example structure: {"claude": {...}, "gemini": {...}, "openai": {...}}`,
         messages: [{ role: "user", content: userMsg }],
       }),
     }, onRetry, timeoutMs);
@@ -378,22 +389,27 @@ Analyze this response for ${company}'s AI perception. Return JSON only.`;
     if (data.error) throw new Error(data.error.message);
     const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
     const cleaned = text.replace(/```json|```/g, "").trim();
-    try { return JSON.parse(cleaned); } catch {
+    let parsed;
+    try { parsed = JSON.parse(cleaned); } catch {
       const m = cleaned.match(/\{[\s\S]*\}/);
-      if (m) return JSON.parse(m[0]);
-      throw new Error("Parse failed");
+      if (m) parsed = JSON.parse(m[0]);
+      else throw new Error("Parse failed");
     }
+    return parsed;
   } catch (e) {
-    // Return a safe default on analysis failure
-    return {
-      mentioned: false, rank: null, sentiment: "absent",
-      framing: "analysis failed", strengths: [], gaps: ["Analysis error: " + e.message],
-      vendors_mentioned: [], content_gaps: [], threats: [],
-      recommendation: "Retry scan", accuracy: 0, completeness: 0, positioning: 0,
-      response_snippet: llmResponse.substring(0, 250),
-      full_response: llmResponse,
-      _error: e.message,
-    };
+    // Return error analyses for all LLMs
+    const fallback = {};
+    llmKeys.forEach(k => {
+      fallback[k] = {
+        mentioned: false, rank: null, sentiment: "absent",
+        framing: "analysis failed", strengths: [], gaps: ["Batch analysis error: " + e.message],
+        vendors_mentioned: [], cited_sources: [], content_gaps: [], threats: [],
+        recommendation: "Retry scan", accuracy: 0, completeness: 0, positioning: 0,
+        citation_presence: false, sirion_content_cited: false,
+        _error: e.message,
+      };
+    });
+    return fallback;
   }
 }
 
@@ -515,8 +531,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     }
     apiCalls += llmIds.length;
 
-    // ── Wave 2: Analyze responses SEQUENTIALLY to avoid rate limiting ──
-    // (Each analysis uses Claude — parallel analysis causes 3 Claude calls at once)
+    // ── Wave 2: Batch-analyze ALL responses in ONE Claude call ──
+    // (3 separate analysis calls → 1 batched call = 50% fewer Claude API calls)
     onProgress?.({
       phase: "analyzing",
       current: qi * llmIds.length + llmIds.length,
@@ -527,31 +543,42 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round(((qi + 0.5) / queries.length) * 70),
     });
 
-    const analyzeResults = [];
-    let successfulAsks = 0;
-    for (let li = 0; li < llmIds.length; li++) {
-      const llmId = llmIds[li];
-      const settled = askResults[li];
+    // Collect successful responses for batch analysis
+    const successfulResponses = {};
+    const responseTexts = {};
+    llmIds.forEach((llmId, i) => {
+      const settled = askResults[i];
       const response = settled.status === "fulfilled" ? settled.value : null;
-
-      // If ask failed, skip analyze
-      if (!response || !response.ok) {
+      if (response?.ok) {
+        successfulResponses[llmId] = response.text;
+        responseTexts[llmId] = response;
+      } else {
         const errMsg = response?.error || settled.reason?.message || "LLM call failed";
         errors.push({ qid: q.id, llm: llmId, error: errMsg });
         partialFailures++;
-        analyzeResults.push({ status: "fulfilled", value: { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg } });
-        continue;
+        analyses[llmId] = { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg };
       }
-      successfulAsks++;
+    });
 
-      try {
-        const analysis = await analyzeResponse(q.query, response.text, company, onRetry, 25000);
-        analysis.response_snippet = response.text.substring(0, 300);
-        analysis.full_response = response.text;
-        // Merge Perplexity's native citations into cited_sources
-        if (response.citations && response.citations.length > 0) {
+    // One Claude call analyzes all successful responses at once
+    if (Object.keys(successfulResponses).length > 0) {
+      apiCalls++; // Just 1 API call for all analyses
+      const batchResult = await analyzeBatch(q.query, successfulResponses, company, onRetry, 45000);
+
+      // Distribute batch results back to per-LLM analyses
+      Object.entries(batchResult).forEach(([llmId, analysis]) => {
+        if (!analysis || analysis._error) {
+          analyses[llmId] = analysis || { ...ERROR_ANALYSIS, _error: "Missing from batch" };
+          return;
+        }
+        // Attach response text
+        const resp = responseTexts[llmId];
+        analysis.response_snippet = resp?.text?.substring(0, 300) || "";
+        analysis.full_response = resp?.text || "";
+        // Merge Perplexity citations
+        if (resp?.citations?.length > 0) {
           const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
-          response.citations.forEach(url => {
+          resp.citations.forEach(url => {
             try {
               const d = new URL(url).hostname.replace(/^www\./, "");
               if (!existing.has(d)) {
@@ -561,29 +588,20 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
             } catch {}
           });
         }
-        // Post-analysis fallback: compute citation fields from cited_sources if not returned
+        // Post-analysis fallback for citation fields
         const sources = analysis.cited_sources || [];
-        if (typeof analysis.citation_presence !== "boolean") {
-          analysis.citation_presence = sources.length > 0;
-        }
+        if (typeof analysis.citation_presence !== "boolean") analysis.citation_presence = sources.length > 0;
         if (typeof analysis.sirion_content_cited !== "boolean") {
-          analysis.sirion_content_cited = sources.some(s =>
-            /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain)
-          );
+          analysis.sirion_content_cited = sources.some(s => /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain));
         }
-        analyzeResults.push({ status: "fulfilled", value: analysis });
-      } catch (e) {
-        partialFailures++;
-        analyzeResults.push({ status: "fulfilled", value: { ...ERROR_ANALYSIS, gaps: ["Analysis error: " + e.message], _error: e.message, response_snippet: response.text.substring(0, 250), full_response: response.text } });
-      }
-    }
-    apiCalls += successfulAsks;
+        analyses[llmId] = analysis;
+      });
 
-    // Collect analyses
-    llmIds.forEach((llmId, i) => {
-      const settled = analyzeResults[i];
-      analyses[llmId] = settled.status === "fulfilled" ? settled.value : { ...ERROR_ANALYSIS, _error: "Promise rejected" };
-    });
+      // Fill in any LLMs not returned by batch
+      llmIds.forEach(id => {
+        if (!analyses[id]) analyses[id] = { ...ERROR_ANALYSIS, _error: "Not in batch result" };
+      });
+    }
 
     // Score difficulty based on all analyses for this query
     const difficulty = scoreDifficulty(analyses);
