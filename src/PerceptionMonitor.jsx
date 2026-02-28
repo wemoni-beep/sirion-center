@@ -368,6 +368,50 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Real-time sync: refresh scan state when user returns to tab ──
+  // Prevents stale UI after refresh/tab-switch/leaving window
+  useEffect(() => {
+    const refreshScanState = async () => {
+      if (scanning) return; // Don't interfere with an active scan
+      try {
+        const fbMeta = await db.getAllPaginated("m2_scan_meta");
+        const pausedOrRunning = fbMeta.find(m => m.status === "paused" || m.status === "running");
+        if (pausedOrRunning) {
+          let fbResults = [];
+          try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
+          const completedResults = fbResults.filter(r => {
+            const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+            return sid === pausedOrRunning.id;
+          });
+          const completedQids = new Set(completedResults.map(r => r.qid));
+          setResumableScan({
+            meta: pausedOrRunning,
+            completedQids,
+            completedCount: completedQids.size,
+            totalQueries: pausedOrRunning.totalQueries || 0,
+          });
+        } else {
+          setResumableScan(null);
+        }
+      } catch (e) { console.warn("Scan state refresh failed:", e.message); }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshScanState();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    // Also poll every 30s while page is visible
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible" && !scanning) refreshScanState();
+    }, 30000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(interval);
+    };
+  }, [scanning]);
+
   // Save question bank to Firebase whenever queries change (after initial load)
   useEffect(() => {
     if (!queriesLoaded) return;
@@ -1086,13 +1130,26 @@ export default function App() {
                     You can resume to complete the remaining {resumableScan.totalQueries - resumableScan.completedCount} queries.
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <Btn primary onClick={() => {
-                      // Resume: filter out already-completed queries
-                      const remaining = queries.filter(q => !resumableScan.completedQids.has(q.id));
-                      if (remaining.length > 0) {
-                        handleRunScan(remaining);
-                      } else {
-                        setScanError("All queries already completed in previous scan.");
+                    <Btn primary onClick={async () => {
+                      // Guard: re-read Firebase to get latest completed count before resuming
+                      try {
+                        let fbResults = [];
+                        try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
+                        const freshCompleted = fbResults.filter(r => {
+                          const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+                          return sid === resumableScan.meta.id;
+                        });
+                        const freshQids = new Set(freshCompleted.map(r => r.qid));
+                        const remaining = queries.filter(q => !freshQids.has(q.id));
+                        if (remaining.length > 0) {
+                          handleRunScan(remaining);
+                        } else {
+                          setScanError("All queries already completed in previous scan.");
+                        }
+                      } catch (e) {
+                        // Fallback to cached state if Firebase read fails
+                        const remaining = queries.filter(q => !resumableScan.completedQids.has(q.id));
+                        if (remaining.length > 0) handleRunScan(remaining);
                       }
                       setResumableScan(null);
                     }}>Resume Scan ({resumableScan.totalQueries - resumableScan.completedCount} remaining)</Btn>

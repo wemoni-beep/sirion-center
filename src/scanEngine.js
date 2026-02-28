@@ -93,7 +93,7 @@ async function fetchWithRetry(url, options, onRetry, timeoutMs = 30000) {
    ─────────────────────────────────────────────── */
 
 const llmLastCall = { claude: 0, gemini: 0, openai: 0, perplexity: 0 };
-const LLM_MIN_GAP = { claude: 200, gemini: 1100, openai: 300, perplexity: 400 };
+const LLM_MIN_GAP = { claude: 1500, gemini: 1100, openai: 500, perplexity: 600 };
 
 async function throttle(llmId) {
   const now = Date.now();
@@ -613,6 +613,11 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       status: `${qi + 1}/${queries.length} questions done`,
       percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
     });
+
+    // Cool-down between queries to prevent rate limiting (2s pause)
+    if (qi < queries.length - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 
   // Compute aggregate scores

@@ -516,6 +516,8 @@ export default function QuestionGenerator({ onNavigate }) {
   }, [personaProfiles]);
 
   // ── Merged questions (static + KB + AI) with deduplication ──
+  // Always includes ALL questions regardless of persona/cluster selection
+  // so the database count stays consistent (138) everywhere.
   const questions = useMemo(() => {
     if (!generated) return [];
     const seen = new Set();
@@ -526,10 +528,8 @@ export default function QuestionGenerator({ onNavigate }) {
       if (!seen.has(hash)) { seen.add(hash); merged.push(q); }
     };
 
-    // Tier 1: Static Q_BANK
-    Q_BANK
-      .filter(q => activePersonas.has(q.p) && activeClusters.has(q.c))
-      .forEach((q, i) => addQ({
+    // Tier 1: Static Q_BANK — ALL questions, no persona/cluster filter
+    Q_BANK.forEach((q, i) => addQ({
         id: `q-${i + 1}`,
         query: q.q.replace(/\{company\}/g, company),
         persona: q.p, stage: q.s, cluster: q.c,
@@ -539,16 +539,14 @@ export default function QuestionGenerator({ onNavigate }) {
 
     // Tier 2: Cached KB questions (preserve persona-research source)
     kbQuestions
-      .filter(q => activePersonas.has(q.persona) && activeClusters.has(q.cluster))
       .forEach(q => addQ({ ...q, source: q.source === "persona-research" ? "persona-research" : "kb" }));
 
     // Tier 3: Fresh AI questions
     aiQuestions
-      .filter(q => activePersonas.has(q.persona) && activeClusters.has(q.cluster))
       .forEach(q => addQ(q));
 
     return merged;
-  }, [generated, company, activePersonas, activeClusters, aiQuestions, kbQuestions]);
+  }, [generated, company, aiQuestions, kbQuestions]);
 
   const filtered = useMemo(() => {
     return questions.filter(q => {
@@ -600,7 +598,6 @@ export default function QuestionGenerator({ onNavigate }) {
     setCompanyIntel(null);
 
     const staticIds = Q_BANK
-      .filter(q => activePersonas.has(q.p) && activeClusters.has(q.c))
       .map((_, i) => `q-${i + 1}`);
     setSelectedQs(new Set(staticIds));
 
@@ -1564,7 +1561,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
 
           {/* Action Buttons: Show Database (daily) + Generate New (weekly) */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-            <button onClick={() => { setGenerated(true); (async () => { try { const cached = await getQuestionsForCompany(company); if (cached.length > 0) { setKbQuestions(cached); setSelectedQs(new Set([...Q_BANK.filter(q => activePersonas.has(q.p) && activeClusters.has(q.c)).map((_, i) => `q-${i + 1}`), ...cached.map(q => q.id)])); } else { setSelectedQs(new Set(Q_BANK.filter(q => activePersonas.has(q.p) && activeClusters.has(q.c)).map((_, i) => `q-${i + 1}`))); } const intel = await getCompanyIntel(company); if (intel) setCompanyIntel(intel); } catch {} })(); }}
+            <button onClick={() => { setGenerated(true); (async () => { try { const cached = await getQuestionsForCompany(company); if (cached.length > 0) { setKbQuestions(cached); setSelectedQs(new Set([...Q_BANK.map((_, i) => `q-${i + 1}`), ...cached.map(q => q.id)])); } else { setSelectedQs(new Set(Q_BANK.map((_, i) => `q-${i + 1}`))); } const intel = await getCompanyIntel(company); if (intel) setCompanyIntel(intel); } catch {} })(); }}
               disabled={!company || activePersonas.size === 0}
               style={{
                 background: t.bgCard, color: t.brand, border: `1.5px solid ${t.brand}40`, borderRadius: 8,
