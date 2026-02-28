@@ -489,7 +489,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     const q = queries[qi];
     const analyses = {};
 
-    // ── Wave 1: Ask all LLMs in parallel ──
+    // ── Wave 1: Ask LLMs SEQUENTIALLY to avoid connection overload ──
+    // (Parallel asks cause 3 simultaneous connections — triggers network errors)
     onProgress?.({
       phase: "scanning",
       current: qi * llmIds.length,
@@ -500,13 +501,18 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round((qi / queries.length) * 70),
     });
 
-    const askPromises = llmIds.map(llmId => {
-      const caller = LLM_CALLERS[llmId];
-      if (!caller) return Promise.resolve({ ok: false, error: "Unknown LLM" });
-      return caller(q.query, onRetry);
-    });
-
-    const askResults = await Promise.allSettled(askPromises);
+    const askResults = [];
+    for (let li = 0; li < llmIds.length; li++) {
+      if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
+      const caller = LLM_CALLERS[llmIds[li]];
+      if (!caller) { askResults.push({ status: "fulfilled", value: { ok: false, error: "Unknown LLM" } }); continue; }
+      try {
+        const val = await caller(q.query, onRetry);
+        askResults.push({ status: "fulfilled", value: val });
+      } catch (reason) {
+        askResults.push({ status: "rejected", reason });
+      }
+    }
     apiCalls += llmIds.length;
 
     // ── Wave 2: Analyze responses SEQUENTIALLY to avoid rate limiting ──
