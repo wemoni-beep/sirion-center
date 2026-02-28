@@ -379,16 +379,14 @@ export default function App() {
         if (pausedOrRunning) {
           let fbResults = [];
           try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
-          const completedResults = fbResults.filter(r => {
-            const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
-            return sid === pausedOrRunning.id;
-          });
-          const completedQids = new Set(completedResults.map(r => r.qid));
+          // Count ALL completed results across ALL scan IDs (not just this scan)
+          // This handles the case where resume created a new scanId before the fix
+          const allCompletedQids = new Set(fbResults.map(r => r.qid).filter(Boolean));
           setResumableScan({
             meta: pausedOrRunning,
-            completedQids,
-            completedCount: completedQids.size,
-            totalQueries: pausedOrRunning.totalQueries || 0,
+            completedQids: allCompletedQids,
+            completedCount: allCompletedQids.size,
+            totalQueries: queries.length || pausedOrRunning.totalQueries || 138,
           });
         } else {
           setResumableScan(null);
@@ -1156,17 +1154,14 @@ export default function App() {
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <Btn primary onClick={async () => {
-                      // Guard: re-read Firebase to get latest completed count before resuming
+                      // Guard: re-read Firebase to get ALL completed queries across ALL scans
                       const originalScanId = resumableScan.meta.id;
                       const originalDate = resumableScan.meta.date;
                       try {
                         let fbResults = [];
                         try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
-                        const freshCompleted = fbResults.filter(r => {
-                          const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
-                          return sid === originalScanId;
-                        });
-                        const freshQids = new Set(freshCompleted.map(r => r.qid));
+                        // Count ALL completed qids regardless of scan ID
+                        const freshQids = new Set(fbResults.map(r => r.qid).filter(Boolean));
                         const remaining = queries.filter(q => !freshQids.has(q.id));
                         if (remaining.length > 0) {
                           // Resume with SAME scanId — new results accumulate under original scan
