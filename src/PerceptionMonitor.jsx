@@ -689,10 +689,11 @@ export default function App() {
     };
     const metaSaved = await db.saveWithId("m2_scan_meta", scanId, scanMeta);
     if (!metaSaved) {
-      setScanError("Failed to create scan record in database. Check your connection. Error: " + (db.getLastError() || "unknown"));
-      setScanning(false);
-      setScanProgress(null);
-      return;
+      // Firebase unavailable — data is already saved to localStorage. Continue scan.
+      setSaveWarnings(prev => [...prev, {
+        msg: "Firebase unavailable — scan will save to browser storage only. " + (db.getLastError() || "Check Firestore rules."),
+        ts: Date.now(),
+      }]);
     }
 
     // Create abort controller for this scan
