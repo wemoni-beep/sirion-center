@@ -220,7 +220,7 @@ export const db = {
   async getAll(collection) {
     _lastDbError = null;
     try {
-      const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=50`;
+      const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=300`;
       const res = await fetch(url);
       if (!res.ok) {
         const err = await res.text();
