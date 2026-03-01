@@ -505,6 +505,88 @@ RULES:
   return prompt;
 }
 
+/* ── Decision Criteria per Persona ───────────────────── */
+const DECISION_CRITERIA = {
+  gc: [
+    { id: "playbook_enforcement", label: "Playbook Enforcement at Scale", weight: 9 },
+    { id: "third_party_paper", label: "Third-Party Paper Handling", weight: 8 },
+    { id: "regulatory_compliance", label: "Regulatory Compliance (GDPR/DPA)", weight: 9 },
+    { id: "clause_risk_scoring", label: "Clause Risk Scoring", weight: 7 },
+    { id: "ma_due_diligence", label: "M&A Due Diligence Velocity", weight: 7 },
+    { id: "litigation_prevention", label: "Litigation Risk Prevention", weight: 8 },
+    { id: "external_counsel_control", label: "External Counsel Spend Control", weight: 6 },
+  ],
+  cpo: [
+    { id: "supplier_obligation_tracking", label: "Supplier Obligation Tracking", weight: 9 },
+    { id: "spend_visibility", label: "Spend Under Management Visibility", weight: 8 },
+    { id: "rogue_spend_control", label: "Rogue Spend Control", weight: 7 },
+    { id: "auto_renewal_mgmt", label: "Auto-Renewal Management", weight: 8 },
+    { id: "vendor_compliance", label: "Vendor Compliance Tracking", weight: 7 },
+    { id: "supplier_risk", label: "Supplier Risk & ESG Compliance", weight: 6 },
+  ],
+  cio: [
+    { id: "erp_crm_integration", label: "ERP/CRM Integration Depth", weight: 9 },
+    { id: "data_security", label: "Data Security & Residency", weight: 9 },
+    { id: "api_capabilities", label: "API Capabilities", weight: 8 },
+    { id: "sso_access", label: "SSO & Access Management", weight: 7 },
+    { id: "ai_governance", label: "AI Governance & Explainability", weight: 7 },
+    { id: "change_management", label: "Change Management & Adoption", weight: 6 },
+  ],
+  vplo: [
+    { id: "workflow_automation", label: "Workflow Automation", weight: 9 },
+    { id: "cycle_time_reduction", label: "Cycle Time Reduction", weight: 9 },
+    { id: "self_service_contracts", label: "Self-Service Contract Tools", weight: 8 },
+    { id: "headcount_efficiency", label: "Headcount Efficiency (contracts/FTE)", weight: 8 },
+    { id: "legal_metrics_dashboard", label: "Legal Metrics Dashboard", weight: 7 },
+    { id: "tech_stack_consolidation", label: "Tech Stack Rationalization", weight: 7 },
+  ],
+  cto: [
+    { id: "ai_model_quality", label: "AI Model Quality & Accuracy", weight: 9 },
+    { id: "security_architecture", label: "Security Architecture (SOC 2)", weight: 9 },
+    { id: "api_first_architecture", label: "API-First Architecture", weight: 8 },
+    { id: "enterprise_scalability", label: "Enterprise Scalability", weight: 8 },
+    { id: "ai_training_data", label: "AI Training Data Quality", weight: 7 },
+    { id: "build_vs_buy", label: "Build vs Buy Flexibility", weight: 7 },
+  ],
+  cm: [
+    { id: "renewal_alerts", label: "Renewal & Deadline Alerts", weight: 9 },
+    { id: "approval_workflow_speed", label: "Approval Workflow Speed", weight: 9 },
+    { id: "template_management", label: "Template Management", weight: 8 },
+    { id: "amendment_tracking", label: "Amendment & Version Control", weight: 8 },
+    { id: "contract_repository", label: "Contract Search & Repository", weight: 8 },
+    { id: "counterparty_collab", label: "Counterparty Collaboration", weight: 7 },
+  ],
+  pd: [
+    { id: "vendor_negotiation_support", label: "Vendor Negotiation Support", weight: 8 },
+    { id: "auto_renewal_traps", label: "Auto-Renewal Trap Detection", weight: 8 },
+    { id: "supplier_contract_compliance", label: "Supplier Contract Compliance", weight: 8 },
+    { id: "procurement_templates", label: "Procurement Templates", weight: 7 },
+    { id: "category_spend_analysis", label: "Category Spend from Contracts", weight: 7 },
+    { id: "vendor_onboarding", label: "Vendor Onboarding Speed", weight: 6 },
+  ],
+  cfo: [
+    { id: "financial_exposure", label: "Financial Exposure Visibility", weight: 9 },
+    { id: "revenue_recognition", label: "Revenue Recognition Compliance (ASC 606)", weight: 9 },
+    { id: "contract_leakage", label: "Contract Value Leakage Detection", weight: 9 },
+    { id: "roi_measurement", label: "CLM ROI Measurement", weight: 8 },
+    { id: "board_reporting", label: "Board-Level Portfolio Reporting", weight: 7 },
+    { id: "financial_controls", label: "Financial Controls Integration", weight: 7 },
+  ],
+};
+
+/* ── Intent type display config ──────────────────────── */
+const INTENT_CONFIG = {
+  generic:   { label: "Generic",   color: "#94a3b8", bg: "rgba(148,163,184,0.12)", desc: "Industry-wide, no vendor" },
+  category:  { label: "Category",  color: "#67e8f9", bg: "rgba(103,232,249,0.12)", desc: "CLM category-level" },
+  vendor:    { label: "Vendor",    color: "#a78bfa", bg: "rgba(167,139,250,0.12)", desc: "Mentions specific vendor" },
+  decision:  { label: "Decision",  color: "#4ade80", bg: "rgba(74,222,128,0.12)",  desc: "Evaluation/comparison" },
+};
+const VOLUME_CONFIG = {
+  high:   { label: "High Vol",  color: "#fbbf24", bg: "rgba(251,191,36,0.12)" },
+  medium: { label: "Med Vol",   color: "#67e8f9", bg: "rgba(103,232,249,0.10)" },
+  niche:  { label: "Niche",     color: "#a78bfa", bg: "rgba(167,139,250,0.10)" },
+};
+
 /* ── AI Progress Steps ────────────────────────────────── */
 const AI_STEPS = [
   "Loading knowledge base\u2026",
@@ -608,6 +690,16 @@ export default function QuestionGenerator({ onNavigate }) {
   const [aiCurrentPersona, setAiCurrentPersona] = useState(null); // { id, short, idx, total }
   const [aiError, setAiError] = useState("");
   const [companyIntel, setCompanyIntel] = useState(null);
+
+  // ── Enrichment state ──
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  const [enrichmentProgress, setEnrichmentProgress] = useState({ done: 0, total: 0 });
+  const [filterIntentType, setFilterIntentType] = useState("all");
+  const [filterVolumeTier, setFilterVolumeTier] = useState("all");
+
+  // ── Decision Matrix state ──
+  const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
+  const [decisionScores, setDecisionScores] = useState({}); // key: "gc.criterion_id" → score 1-10
 
   // ── Knowledge base state ──
   const [kbStats, setKbStats] = useState({ totalQuestions: 0, totalMacros: 0, companiesResearched: 0, totalPersonas: 0 });
@@ -775,9 +867,11 @@ export default function QuestionGenerator({ onNavigate }) {
       if (filterPersona !== "all" && q.persona !== filterPersona) return false;
       if (filterJurisdiction !== "all" && (q.jurisdiction || "Global") !== filterJurisdiction) return false;
       if (filterLifecycle !== "all" && (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack") !== filterLifecycle) return false;
+      if (filterIntentType !== "all" && q.intentType !== filterIntentType) return false;
+      if (filterVolumeTier !== "all" && q.volumeTier !== filterVolumeTier) return false;
       return true;
     });
-  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle]);
+  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier]);
 
   const jurisdictions = useMemo(() => {
     const set = new Set();
@@ -849,6 +943,109 @@ export default function QuestionGenerator({ onNavigate }) {
     } catch {}
 
     generateAIQuestions();
+  };
+
+  // ── Enrich & Map Questions (retroactive classification) ──
+  const enrichQuestions = async () => {
+    const allQs = [...questions]; // includes static + kb + ai + pipeline
+    if (allQs.length === 0) return;
+    setEnrichmentLoading(true);
+    setEnrichmentProgress({ done: 0, total: allQs.length });
+
+    const BATCH = 20;
+    const batches = [];
+    for (let i = 0; i < allQs.length; i += BATCH) batches.push(allQs.slice(i, i + BATCH));
+
+    // Flatten all criteria ids for the prompt
+    const allCriteria = Object.entries(DECISION_CRITERIA).flatMap(([pid, crit]) =>
+      crit.map(c => `${pid}.${c.id}`)
+    ).join(", ");
+
+    let enriched = [];
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const systemPrompt = `You enrich CLM buyer-intent questions with 4 classification fields.
+
+PERSONA ROLES: gc=General Counsel, cpo=Chief Procurement Officer, cio=CIO, vplo=VP Legal Ops, cto=VP IT/CTO, cm=Contract Manager, pd=Procurement Director, cfo=CFO
+
+INTENT TYPES:
+- generic: Could be asked by anyone, no vendor or category specificity (e.g. "what is contract management")
+- category: CLM category-level question, no specific vendor (e.g. "how does AI help with contract review")
+- vendor: Mentions a specific vendor by name
+- decision: Evaluation/comparison/ROI/validation question indicating active buying
+
+VOLUME TIERS:
+- high: Thousands search this monthly (generic awareness)
+- medium: Hundreds search this (category evaluation)
+- niche: Few dozen search this (specific evaluation, deep decision)
+
+DECISION CRITERIA IDs (for criterion field — pick the single best match, or null):
+${allCriteria}
+
+For each question, return:
+- personaFit: 1-10 (1=any exec could ask, 10=only this exact persona would ask this)
+- bestPersona: the persona id that fits the question best (gc/cpo/cio/vplo/cto/cm/pd/cfo)
+- intentType: generic|category|vendor|decision
+- volumeTier: high|medium|niche
+- criterion: best matching criterion id from the list above (e.g. "gc.playbook_enforcement"), or null
+
+OUTPUT: valid JSON array only — [{idx,personaFit,bestPersona,intentType,volumeTier,criterion}]`;
+
+      const userMsg = batch.map((q, i) => `${i}: persona=${q.persona} | "${q.query}"`).join("\n");
+
+      try {
+        const raw = await callClaudeFast(systemPrompt, userMsg, 30000);
+        // callClaudeFast returns text, parse as JSON
+        let results = [];
+        try {
+          const txt = typeof raw === "string" ? raw : JSON.stringify(raw);
+          const match = txt.match(/\[[\s\S]*\]/);
+          if (match) results = JSON.parse(match[0]);
+        } catch {}
+
+        results.forEach(r => {
+          const q = batch[r.idx];
+          if (!q) return;
+          enriched.push({
+            ...q,
+            personaFit: r.personaFit || null,
+            bestPersona: r.bestPersona || q.persona,
+            intentType: r.intentType || null,
+            volumeTier: r.volumeTier || null,
+            criterion: r.criterion || null,
+            enrichedAt: new Date().toISOString(),
+          });
+        });
+        // Fill any that Claude skipped
+        batch.forEach((q, i) => {
+          if (!results.find(r => r.idx === i)) enriched.push(q);
+        });
+      } catch {
+        batch.forEach(q => enriched.push(q));
+      }
+
+      setEnrichmentProgress({ done: Math.min((bi + 1) * BATCH, allQs.length), total: allQs.length });
+    }
+
+    // Save enriched back to IndexedDB + Firebase
+    const toSave = enriched.filter(q => q.enrichedAt);
+    await saveQuestions(toSave);
+    const now = new Date().toISOString();
+    (async () => {
+      for (const q of toSave) {
+        try { await db.saveWithId("m1_questions_v2", q.dedupHash || q.id, { ...q, updated_at: now }); } catch {}
+        await new Promise(r => setTimeout(r, 30));
+      }
+    })();
+
+    // Reload KB questions so enrichment fields appear in state
+    try {
+      const refreshed = await getQuestionsForCompany(company);
+      setKbQuestions(refreshed);
+    } catch {}
+
+    setEnrichmentLoading(false);
+    setEnrichmentProgress({ done: 0, total: 0 });
   };
 
   const generateAIQuestions = async () => {
@@ -1701,6 +1898,9 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
         <button onClick={() => setActiveTab("questions")} style={tabBtn("questions")}>
           Questions
         </button>
+        <button onClick={() => setActiveTab("matrix")} style={tabBtn("matrix")}>
+          Decision Matrix
+        </button>
         <button onClick={() => setActiveTab("research")} style={tabBtn("research")}>
           Persona Research
           {personaProfiles.length > 0 && (
@@ -1808,6 +2008,30 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </div>
           )}
 
+          {/* Enrichment progress bar */}
+          {enrichmentLoading && (
+            <div style={{
+              background: t.bgCard, border: `1px solid ${t.brand}30`, borderLeft: `3px solid #fbbf24`,
+              borderRadius: 10, padding: "14px 20px", marginBottom: 16, animation: "fadeUp 0.3s ease",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fbbf24", animation: "pulse 1.5s ease-in-out infinite" }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", fontFamily: "var(--mono)", letterSpacing: 0.5 }}>
+                  ENRICHING & MAPPING QUESTIONS
+                </span>
+                <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
+                  {enrichmentProgress.done} / {enrichmentProgress.total}
+                </span>
+              </div>
+              <div style={{ height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 2, background: "#fbbf24", transition: "width 0.4s ease",
+                  width: enrichmentProgress.total > 0 ? `${(enrichmentProgress.done / enrichmentProgress.total) * 100}%` : "0%",
+                }} />
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons: Show Database (daily) + Generate New (weekly) */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
             <button onClick={() => { setGenerated(true); (async () => { try { const cached = await getQuestionsForCompany(company); if (cached.length > 0) { setKbQuestions(cached); setSelectedQs(new Set([...Q_BANK.map((_, i) => `q-${i + 1}`), ...cached.map(q => q.id)])); } else { setSelectedQs(new Set(Q_BANK.map((_, i) => `q-${i + 1}`))); } const intel = await getCompanyIntel(company); if (intel) setCompanyIntel(intel); } catch {} })(); }}
@@ -1831,6 +2055,20 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
               }}>
               {aiLoading ? "Generating\u2026" : "Generate New via AI"}
             </button>
+            {generated && questions.length > 0 && (
+              <button
+                onClick={enrichQuestions}
+                disabled={enrichmentLoading}
+                title="Map all questions to personas, intent types, and decision criteria using AI"
+                style={{
+                  padding: "12px 20px", borderRadius: 8, cursor: enrichmentLoading ? "not-allowed" : "pointer",
+                  background: "transparent", border: `1px solid #fbbf2440`, color: "#fbbf24",
+                  fontSize: 13, fontWeight: 700, fontFamily: "var(--mono)", textTransform: "uppercase",
+                  letterSpacing: 1, opacity: enrichmentLoading ? 0.4 : 1, transition: "all 0.2s",
+                }}>
+                {enrichmentLoading ? "Mapping\u2026" : "\u2728 Enrich & Map"}
+              </button>
+            )}
             {generated && (
               <span style={{ fontSize: 12, color: t.green, fontFamily: "var(--mono)" }}>
                 {questions.length} questions in database
@@ -2020,6 +2258,26 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   </select>
                 )}
 
+                {questions.some(q => q.intentType) && (
+                  <select value={filterIntentType} onChange={e => setFilterIntentType(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Intent Types</option>
+                    {Object.entries(INTENT_CONFIG).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.intentType === k).length})</option>
+                    ))}
+                  </select>
+                )}
+
+                {questions.some(q => q.volumeTier) && (
+                  <select value={filterVolumeTier} onChange={e => setFilterVolumeTier(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Volume Tiers</option>
+                    {Object.entries(VOLUME_CONFIG).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.volumeTier === k).length})</option>
+                    ))}
+                  </select>
+                )}
+
                 <div style={{ flex: 1 }} />
 
                 <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
@@ -2062,6 +2320,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                       <th style={thStyle(t)}>Source</th>
                       <th style={thStyle(t)}>Jurisdiction</th>
                       <th style={thStyle(t)}>Topic Cluster</th>
+                      <th style={thStyle(t)}>Intent</th>
+                      <th style={thStyle(t)}>Fit</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2152,6 +2412,42 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                               {q.cluster}
                             </span>
                           </td>
+                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                            {q.intentType ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "center" }}>
+                                <span style={badge(INTENT_CONFIG[q.intentType]?.bg, INTENT_CONFIG[q.intentType]?.color)}>
+                                  {INTENT_CONFIG[q.intentType]?.label}
+                                </span>
+                                {q.volumeTier && (
+                                  <span style={{ fontSize: 10, color: VOLUME_CONFIG[q.volumeTier]?.color, fontFamily: "var(--mono)" }}>
+                                    {VOLUME_CONFIG[q.volumeTier]?.label}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                            {q.personaFit != null ? (
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                                <span style={{
+                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)",
+                                  color: q.personaFit >= 8 ? "#4ade80" : q.personaFit >= 5 ? "#fbbf24" : "#f87171",
+                                }}>
+                                  {q.personaFit}
+                                </span>
+                                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>/10</span>
+                                {q.bestPersona && q.bestPersona !== q.persona && (
+                                  <span style={{ fontSize: 10, color: "#f87171", fontFamily: "var(--mono)" }} title={`Better fit: ${q.bestPersona}`}>
+                                    →{q.bestPersona.toUpperCase()}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -2178,6 +2474,205 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </>
           )}
         </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* TAB: DECISION MATRIX                              */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {activeTab === "matrix" && (
+        <div>
+          <div style={{ marginBottom: 24 }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: t.text }}>
+              Decision Matrix
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
+              Per-persona evaluation criteria. Score Sirion 1–10 on each criterion.
+              Run <strong style={{ color: "#fbbf24" }}>Enrich & Map</strong> from the Questions tab first to populate question coverage.
+            </p>
+          </div>
+
+          {/* Persona selector */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
+            {PERSONAS.map(p => (
+              <button key={p.id} onClick={() => setActiveMatrixPersona(p.id)} style={{
+                padding: "8px 16px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 700,
+                fontFamily: "var(--mono)", border: `1px solid ${activeMatrixPersona === p.id ? t.brand + "60" : t.border}`,
+                background: activeMatrixPersona === p.id ? t.brand + "15" : "transparent",
+                color: activeMatrixPersona === p.id ? t.brand : t.textDim, transition: "all 0.15s",
+              }}>
+                {p.icon} {p.short}
+              </button>
+            ))}
+          </div>
+
+          {/* Matrix table */}
+          {(() => {
+            const criteria = DECISION_CRITERIA[activeMatrixPersona] || [];
+            const personaLabel = PERSONAS.find(p => p.id === activeMatrixPersona)?.label || "";
+            const qForPersona = questions.filter(q => q.persona === activeMatrixPersona);
+            const enrichedCount = qForPersona.filter(q => q.personaFit != null).length;
+
+            return (
+              <div>
+                {/* Summary bar */}
+                <div style={{
+                  display: "flex", gap: 20, padding: "12px 18px", marginBottom: 16,
+                  background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
+                  flexWrap: "wrap", alignItems: "center",
+                }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: t.brand, fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {qForPersona.length}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Questions
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#fbbf24", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {enrichedCount}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Enriched
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#4ade80", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {criteria.length}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Criteria
+                    </div>
+                  </div>
+                  {/* Overall score */}
+                  {(() => {
+                    const scored = criteria.filter(c => decisionScores[`${activeMatrixPersona}.${c.id}`] != null);
+                    if (scored.length === 0) return null;
+                    const weightedSum = scored.reduce((s, c) => s + (decisionScores[`${activeMatrixPersona}.${c.id}`] * c.weight), 0);
+                    const maxSum = scored.reduce((s, c) => s + (10 * c.weight), 0);
+                    const pct = Math.round((weightedSum / maxSum) * 100);
+                    return (
+                      <div style={{ marginLeft: "auto" }}>
+                        <div style={{
+                          fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
+                          color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171",
+                        }}>
+                          {pct}%
+                        </div>
+                        <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                          Weighted Score
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thStyle(t), textAlign: "left", width: "32%" }}>Criterion — {personaLabel}</th>
+                        <th style={thStyle(t)}>Priority</th>
+                        <th style={thStyle(t)}>Questions</th>
+                        <th style={thStyle(t)}>Sirion Score</th>
+                        <th style={thStyle(t)}>Gap</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {criteria.map(c => {
+                        const key = `${activeMatrixPersona}.${c.id}`;
+                        const score = decisionScores[key];
+                        const qCount = questions.filter(q => q.criterion === key).length;
+                        const gap = score != null ? Math.max(0, c.weight - score) : null;
+                        const gapColor = gap == null ? t.textGhost : gap <= 1 ? "#4ade80" : gap <= 3 ? "#fbbf24" : "#f87171";
+
+                        return (
+                          <tr key={c.id} style={{ borderBottom: `1px solid ${t.border}`, transition: "background 0.1s" }}
+                            onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            <td style={{ padding: "12px 16px", color: t.text, fontWeight: 500, lineHeight: 1.4 }}>
+                              {c.label}
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <div style={{ display: "flex", justifyContent: "center", gap: 2 }}>
+                                {Array.from({ length: 10 }).map((_, i) => (
+                                  <div key={i} style={{
+                                    width: 5, height: 5, borderRadius: "50%",
+                                    background: i < c.weight
+                                      ? (c.weight >= 8 ? "#f87171" : c.weight >= 6 ? "#fbbf24" : "#67e8f9")
+                                      : t.border,
+                                  }} />
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                                {c.weight}/10
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <span style={{
+                                fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171",
+                              }}>
+                                {qCount}
+                              </span>
+                              {qCount === 0 && (
+                                <div style={{ fontSize: 9, color: "#f87171", fontFamily: "var(--mono)" }}>no coverage</div>
+                              )}
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <input
+                                type="number" min="1" max="10"
+                                value={score ?? ""}
+                                placeholder="—"
+                                onChange={e => {
+                                  const v = parseInt(e.target.value);
+                                  setDecisionScores(prev => ({
+                                    ...prev,
+                                    [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)),
+                                  }));
+                                }}
+                                style={{
+                                  width: 48, padding: "4px 6px", borderRadius: 6, textAlign: "center",
+                                  border: `1px solid ${score != null ? t.brand + "50" : t.border}`,
+                                  background: score != null ? t.brand + "08" : t.inputBg,
+                                  color: score != null ? t.brand : t.textDim,
+                                  fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                  outline: "none",
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              {gap != null ? (
+                                <span style={{
+                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)", color: gapColor,
+                                }}>
+                                  {gap === 0 ? "✓" : `-${gap}`}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Gap legend */}
+                <div style={{ display: "flex", gap: 16, marginTop: 12, padding: "10px 16px", background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8 }}>
+                  <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Gap =</span>
+                  <span style={{ fontSize: 11, color: "#4ade80", fontFamily: "var(--mono)" }}>✓ Covered</span>
+                  <span style={{ fontSize: 11, color: "#fbbf24", fontFamily: "var(--mono)" }}>-1 to -3 Partial</span>
+                  <span style={{ fontSize: 11, color: "#f87171", fontFamily: "var(--mono)" }}>&gt;-3 Critical gap</span>
+                  <span style={{ fontSize: 11, color: t.textDim, marginLeft: "auto", fontFamily: "var(--mono)" }}>
+                    Scores saved in session. Run Enrich & Map to populate question coverage.
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════ */}
