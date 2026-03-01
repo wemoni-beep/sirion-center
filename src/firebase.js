@@ -3,8 +3,8 @@
    ═══════════════════════════════════════════ */
 
 export const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyB21j9XJmSf-SaHxcF780TfSojsOtfoC9c",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-deploy-08480747-ed13b"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID
 };
 
 export const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
