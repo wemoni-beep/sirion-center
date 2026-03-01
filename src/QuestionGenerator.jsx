@@ -737,14 +737,6 @@ export default function QuestionGenerator({ onNavigate }) {
     return () => clearInterval(interval);
   }, [enrichmentLoading]);
 
-  // ── Auto-enrich after generation completes ──
-  // Waits for aiLoading to go false, then triggers enrichment with fresh question state
-  useEffect(() => {
-    if (!autoEnrichPending || aiLoading || enrichmentLoading || questions.length === 0) return;
-    setAutoEnrichPending(false);
-    enrichQuestions();
-  }, [autoEnrichPending, aiLoading, enrichmentLoading, questions.length]); // eslint-disable-line
-
   // ── One-time migration: save pipeline questions to KB so they persist ──
   useEffect(() => {
     if (pipelineMigratedRef.current) return;
@@ -908,6 +900,14 @@ export default function QuestionGenerator({ onNavigate }) {
 
     return merged;
   }, [generated, company, aiQuestions, kbQuestions, pipelineQuestions]);
+
+  // ── Auto-enrich after generation completes ──
+  // Must live AFTER questions useMemo so questions.length is defined in the dependency array
+  useEffect(() => {
+    if (!autoEnrichPending || aiLoading || enrichmentLoading || questions.length === 0) return;
+    setAutoEnrichPending(false);
+    enrichQuestions();
+  }, [autoEnrichPending, aiLoading, enrichmentLoading, questions.length]); // eslint-disable-line
 
   const filtered = useMemo(() => {
     return questions.filter(q => {
