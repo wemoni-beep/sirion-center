@@ -326,6 +326,185 @@ function detectPersonaType(title) {
   return "cm";
 }
 
+/* ── Per-Persona Role Contexts ────────────────────────── */
+// Defines the cognitive lens, KPIs, vocabulary, and boundaries for each persona.
+// Each persona's questions are generated FROM this mindset, not labeled with it after the fact.
+const PERSONA_CONTEXTS = {
+  gc: {
+    title: "General Counsel",
+    lens: "Legal risk, regulatory compliance, and contract governance",
+    kpis: ["contract dispute rate", "clause risk exposure", "time to negotiate", "legal spend per contract"],
+    priorities: [
+      "Enforcing playbook standards on inbound third-party paper at scale",
+      "Reducing litigation risk from ambiguous or missing contract terms",
+      "GDPR, DPA, and regulatory compliance across all agreements",
+      "M&A contract due diligence velocity and completeness",
+      "Controlling external counsel spend through better self-serve tooling",
+    ],
+    language: ["indemnification", "governing law", "playbook", "redlines", "material breach", "force majeure", "regulatory exposure", "third-party paper", "clause risk", "obligations"],
+    wouldAsk: ["third-party paper handling", "clause risk scoring", "litigation prevention", "playbook enforcement", "regulatory compliance"],
+    wouldNotAsk: ["procurement savings", "supplier performance", "IT integration specs", "board ROI presentation"],
+  },
+  cpo: {
+    title: "Chief Procurement Officer",
+    lens: "Procurement performance, supplier accountability, and spend optimization",
+    kpis: ["savings realized vs contracted", "supplier SLA compliance %", "spend under management", "on-time renewal %"],
+    priorities: [
+      "Visibility into whether suppliers are actually delivering what contracts commit to",
+      "Tracking obligation milestones and renewal dates automatically",
+      "Eliminating rogue spend and off-contract buying across business units",
+      "Supplier risk management and ESG compliance obligations",
+      "Connecting contract terms to real procurement outcomes and savings",
+    ],
+    language: ["spend under management", "supplier performance", "obligation tracking", "rogue spend", "vendor governance", "sourcing", "contract compliance", "renewal"],
+    wouldAsk: ["supplier obligation tracking", "spend analysis from contracts", "vendor compliance", "auto-renewal alerts", "procurement efficiency"],
+    wouldNotAsk: ["legal clause redlining", "playbook governance", "IT API specs", "financial statement impact"],
+  },
+  cio: {
+    title: "Chief Information Officer",
+    lens: "Technology infrastructure, data security, and enterprise integration",
+    kpis: ["integration completeness", "security posture", "IT contract spend", "implementation success rate"],
+    priorities: [
+      "Integrating CLM with existing ERP/CRM/HRIS stack (Salesforce, SAP, Workday, ServiceNow)",
+      "Data security, residency, and sovereignty of contract content at rest and in transit",
+      "Managing the IT contract lifecycle for software, cloud, and SaaS agreements",
+      "Change management and user adoption across the enterprise",
+      "AI governance and responsible AI policies applied to contract workflows",
+    ],
+    language: ["API", "integration", "SSO", "data residency", "security posture", "tech stack", "scalability", "cloud", "SaaS", "change management", "implementation"],
+    wouldAsk: ["ERP/CRM integration", "security certifications", "API capabilities", "data privacy compliance", "implementation roadmap"],
+    wouldNotAsk: ["legal playbook governance", "procurement savings", "external counsel spend", "clause risk scoring"],
+  },
+  vplo: {
+    title: "VP Legal Operations",
+    lens: "Legal department efficiency, process automation, and measurable output",
+    kpis: ["cost per contract", "cycle time", "contracts per headcount", "legal team utilization rate"],
+    priorities: [
+      "Automating repetitive contract workflows to free lawyers for high-value work",
+      "Building dashboard visibility into legal department performance and throughput",
+      "Rationalizing the legal tech stack — fewer point solutions, more integration",
+      "Scaling contract volume without scaling headcount",
+      "Data-driven reporting on legal operations metrics to GC and CFO",
+    ],
+    language: ["workflow automation", "cycle time", "matter management", "legal ops metrics", "self-service", "intake", "playbook automation", "tech stack rationalization"],
+    wouldAsk: ["workflow automation", "legal metrics dashboards", "self-service contract tools", "tech stack consolidation", "headcount efficiency"],
+    wouldNotAsk: ["supplier performance", "IT security architecture", "board-level ROI", "procurement compliance"],
+  },
+  cto: {
+    title: "VP IT / CTO",
+    lens: "Technical architecture, AI/ML capabilities, and build-vs-buy decisions",
+    kpis: ["system uptime", "API response time", "AI model accuracy", "deployment velocity"],
+    priorities: [
+      "Evaluating AI/ML training data quality and model explainability in CLM platforms",
+      "Build vs buy decisions for contract intelligence and extraction features",
+      "Enterprise scalability, multi-tenant architecture, and performance under load",
+      "Security architecture: SOC 2, penetration testing, zero-trust access model",
+      "Developer-friendly APIs for custom integrations with internal systems",
+    ],
+    language: ["machine learning", "NLP", "API-first", "microservices", "SOC 2", "AI model", "training data", "inference", "scalability", "architecture"],
+    wouldAsk: ["AI model quality and training approach", "API-first architecture", "enterprise scalability", "security architecture", "technical implementation requirements"],
+    wouldNotAsk: ["legal playbook governance", "procurement savings", "financial statement impact", "supplier management"],
+  },
+  cm: {
+    title: "Contract Manager",
+    lens: "Day-to-day contract execution, turnaround speed, and deadline management",
+    kpis: ["contract turnaround time", "on-time renewals %", "template compliance rate", "amendment cycle time"],
+    priorities: [
+      "Getting contracts executed faster with fewer manual steps and email chains",
+      "Never missing a renewal deadline, milestone obligation, or expiry date",
+      "Managing amendment cycles and version control without creating chaos",
+      "Having a single searchable repository for all executed contracts",
+      "Reducing back-and-forth with counterparties and internal approvers",
+    ],
+    language: ["template", "turnaround", "renewal reminder", "amendment", "version control", "approval workflow", "counterparty", "executed contract", "repository", "clause library"],
+    wouldAsk: ["template management", "renewal alerts", "approval workflow speed", "amendment tracking", "contract search and repository"],
+    wouldNotAsk: ["board reporting", "enterprise security architecture", "AI model training", "financial risk exposure"],
+  },
+  pd: {
+    title: "Procurement Director",
+    lens: "Vendor negotiation, contract compliance, and sourcing process efficiency",
+    kpis: ["negotiation cycle time", "savings vs target", "contract compliance rate", "vendor onboarding time"],
+    priorities: [
+      "Speeding up vendor contract negotiation without sacrificing favorable terms",
+      "Tracking whether vendor deliverables actually match contracted commitments",
+      "Managing a growing vendor base across multiple spend categories",
+      "Standardizing contract templates for common vendor types",
+      "Avoiding auto-renewal traps and identifying expiring contracts proactively",
+    ],
+    language: ["vendor", "negotiation", "sourcing", "RFP", "supplier contract", "deliverables", "auto-renewal", "spend category", "preferred supplier", "contract terms"],
+    wouldAsk: ["vendor negotiation support", "procurement templates", "supplier contract compliance", "auto-renewal management", "category spend from contracts"],
+    wouldNotAsk: ["legal risk management", "IT security specs", "financial statement impact", "AI model architecture"],
+  },
+  cfo: {
+    title: "CFO",
+    lens: "Financial risk, revenue recognition, and contract-driven P&L impact",
+    kpis: ["contract-driven revenue at risk", "obligation cost exposure", "contract leakage $", "renewal revenue retained"],
+    priorities: [
+      "Understanding total financial exposure hidden in contract obligations across the portfolio",
+      "Revenue recognition compliance (ASC 606/IFRS 15) tied to contract milestones and deliverables",
+      "Identifying and capturing contract value leakage — missed discounts, SLA credits, price escalations",
+      "Board-level reporting on contract portfolio risk and unrealized value",
+      "Justifying CLM ROI to the CEO with concrete financial metrics",
+    ],
+    language: ["revenue recognition", "financial exposure", "contract value leakage", "obligation cost", "P&L impact", "ASC 606", "risk-adjusted", "financial controls", "ROI", "board reporting"],
+    wouldAsk: ["financial risk from contracts", "revenue recognition compliance", "contract leakage", "ROI calculation", "CFO dashboard for contract portfolio"],
+    wouldNotAsk: ["legal playbook governance", "IT API specs", "supplier management", "legal team efficiency metrics"],
+  },
+};
+
+/* ── Per-Persona Prompt Builder ────────────────────────── */
+function buildPersonaQuestionPrompt(ctx, persona, clusters, company, existing, alreadyGenerated, matchedProfile) {
+  let prompt = `You generate buyer-intent questions that a ${ctx.title} would type into AI assistants (ChatGPT, Perplexity, Claude, Gemini) when evaluating CLM software.
+
+PERSONA LENS — ${ctx.title.toUpperCase()}:
+${ctx.lens}
+
+KPIs they are measured on: ${ctx.kpis.join(", ")}
+Their priorities:
+${ctx.priorities.map(p => `- ${p}`).join("\n")}
+
+Their vocabulary: ${ctx.language.join(", ")}
+They WOULD ask about: ${ctx.wouldAsk.join(", ")}
+They would NEVER ask about: ${ctx.wouldNotAsk.join(", ")}`;
+
+  if (matchedProfile?.psycheProfile) {
+    prompt += `\n\nREAL DECISION MAKER PROFILE — make questions hyper-specific to this person:
+Name: ${matchedProfile.name} — ${matchedProfile.title} at ${matchedProfile.company}
+Decision style: ${matchedProfile.psycheProfile.decisionStyle}
+Risk tolerance: ${matchedProfile.psycheProfile.riskTolerance}
+Buying triggers: ${(matchedProfile.psycheProfile.buyingTriggers || []).join(", ")}
+Pain points: ${(matchedProfile.painPoints || []).slice(0, 3).map(p => p.pain).join("; ")}
+Priorities: ${(matchedProfile.priorities || []).join(", ")}
+Profile: ${matchedProfile.researchSummary || ""}`;
+  }
+
+  prompt += `\n\nTOPIC CLUSTERS TO COVER: ${clusters.join(", ")}
+
+QUESTION TYPES:
+- MACRO (~40%): Industry-wide, no specific vendor mentioned
+- MICRO (~60%): Reference ${company} or specific competitors
+
+JOURNEY STAGES: awareness, discovery, consideration, decision, validation
+CLM LIFECYCLE: pre-signature, post-signature, full-stack
+
+RULES:
+- Generate exactly 12 questions
+- EVERY question must authentically reflect the ${ctx.title}'s cognitive lens and vocabulary
+- Questions must sound like what THIS specific role would type — not what any generic executive asks
+- 10-30 words each, natural phrasing (as typed into a search bar, not formal language)
+- Cover at least 3 different journey stages and all 3 lifecycle stages`;
+
+  const allExisting = [...existing, ...alreadyGenerated];
+  if (allExisting.length > 0) {
+    prompt += `\n\nDO NOT DUPLICATE THESE QUESTIONS:\n${allExisting.slice(0, 30).map((q, i) => `${i + 1}. ${q.query || q.q}`).join("\n")}`;
+  }
+
+  prompt += `\n\nOUTPUT — valid JSON only, no markdown:
+{"companyIntel":{"keyFindings":[],"competitors":[],"recentNews":[],"marketPosition":""},"questions":[{"q":"...","s":"stage","c":"cluster","l":"lifecycle","classification":"macro|micro","context":"why this persona would ask this","confidence":0.9}]}`;
+
+  return prompt;
+}
+
 /* ── AI Progress Steps ────────────────────────────────── */
 const AI_STEPS = [
   "Loading knowledge base\u2026",
@@ -426,6 +605,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const [aiQuestions, setAiQuestions] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState(0);
+  const [aiCurrentPersona, setAiCurrentPersona] = useState(null); // { id, short, idx, total }
   const [aiError, setAiError] = useState("");
   const [companyIntel, setCompanyIntel] = useState(null);
 
@@ -674,24 +854,24 @@ export default function QuestionGenerator({ onNavigate }) {
   const generateAIQuestions = async () => {
     setAiLoading(true);
     setAiStep(0);
+    setAiCurrentPersona(null);
     // Preserve persona-research questions, clear only AI-generated ones
     setAiQuestions(prev => prev.filter(q => q.source === "persona-research"));
 
     try {
       const existing = await getQuestionsForCompany(company);
-
-      setAiStep(1);
+      const now = new Date().toISOString();
+      const coKey = company.toLowerCase().replace(/\s+/g, "-");
       const activeP = PERSONAS.filter(p => activePersonas.has(p.id));
       const activeC = [...activeClusters];
 
-      // Build system prompt
-      let systemPrompt = QUESTION_GEN_SYSTEM + "\n\nPERSONAS:\n" +
-        activeP.map(p => `- ${p.id}: ${p.label}`).join("\n") +
-        "\n\nTOPIC CLUSTERS:\n" + activeC.join(", ");
-
-      // If generating for a specific researched persona, inject their profile
+      // ── SPECIFIC PERSON MODE: single call with psyche profile (unchanged behavior) ──
       const targetProfile = targetPersonaId !== "all" ? personaProfiles.find(p => p.id === targetPersonaId) : null;
       if (targetProfile && targetProfile.psycheProfile) {
+        setAiCurrentPersona({ id: targetProfile.personaType, short: targetProfile.name.split(" ")[0], idx: 0, total: 1 });
+        let systemPrompt = QUESTION_GEN_SYSTEM + "\n\nPERSONAS:\n" +
+          activeP.map(p => `- ${p.id}: ${p.label}`).join("\n") +
+          "\n\nTOPIC CLUSTERS:\n" + activeC.join(", ");
         systemPrompt += `\n\nTARGET DECISION MAKER (generate questions specifically for this person's psyche):
 Name: ${targetProfile.name}
 Title: ${targetProfile.title}
@@ -704,100 +884,119 @@ Priorities: ${(targetProfile.priorities || []).join(", ")}
 Research Summary: ${targetProfile.researchSummary || ""}
 
 CRITICAL: Make questions HYPER-PERSONALIZED to this person. Reference their specific situation, pain points, and priorities. Questions should feel like they were written specifically for ${targetProfile.name}.`;
+        if (existing.length > 0) {
+          systemPrompt += "\n\nEXISTING QUESTIONS (DO NOT DUPLICATE):\n" +
+            existing.slice(0, 30).map((q, i) => `${i + 1}. [${q.persona}/${q.stage}] ${q.query}`).join("\n");
+        }
+        let userMsg = `TARGET COMPANY: ${company}\n`;
+        if (companyUrl) userMsg += `COMPANY URL: ${companyUrl}\n`;
+        userMsg += `INDUSTRY: ${industry}\n\nResearch ${company} thoroughly. Generate 15-20 hyper-personalized buyer-intent questions for ${targetProfile.name}.`;
+        const stepTimer = setInterval(() => setAiStep(prev => prev < 4 ? prev + 1 : prev), 10000);
+        const result = await callClaude(systemPrompt, userMsg, 120000);
+        clearInterval(stepTimer);
+        setAiStep(5);
+        const newQs = (result.questions || []).map((q, i) => ({
+          id: `ai-${coKey}-${targetProfile.personaType}-${Date.now()}-${i}`,
+          query: q.q, persona: q.p || targetProfile.personaType, stage: q.s, cluster: q.c,
+          lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
+          source: "ai", classification: verifyClassification(q, company),
+          company, companyUrl, generatedAt: now,
+          searchContext: q.context || "", confidence: q.confidence || 0.85,
+          dedupHash: questionHash(q.q), targetPersona: targetProfile.name,
+        }));
+        await saveQuestions(newQs);
+        if (result.companyIntel) { await saveCompanyIntel({ companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel }); setCompanyIntel(result.companyIntel); }
+        (async () => { for (const q of newQs) { try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {} await new Promise(r => setTimeout(r, 50)); } })();
+        setAiStep(6);
+        setAiQuestions(newQs);
+        setSelectedQs(prev => { const next = new Set(prev); newQs.forEach(q => next.add(q.id)); return next; });
+        const stats = await getKnowledgeBaseStats(); setKbStats(stats);
+        setCreditsUsed(prev => prev + 0.08);
+        return;
       }
 
-      if (existing.length > 0) {
-        systemPrompt += "\n\nEXISTING QUESTIONS (DO NOT DUPLICATE):\n" +
-          existing.slice(0, 30).map((q, i) => `${i + 1}. [${q.persona}/${q.stage}] ${q.query}`).join("\n");
-      } else {
-        systemPrompt += "\n\nNo existing questions yet \u2014 first generation for this company.";
+      // ── PER-PERSONA MODE: 1 API call per persona, each from their own cognitive lens ──
+      setAiStep(1);
+      let allNewQs = [];
+      let companyIntelSaved = false;
+
+      for (let pi = 0; pi < activeP.length; pi++) {
+        const persona = activeP[pi];
+        const ctx = PERSONA_CONTEXTS[persona.id];
+        if (!ctx) continue;
+
+        setAiCurrentPersona({ id: persona.id, short: persona.short, idx: pi, total: activeP.length });
+
+        // Inject researched profile if one exists for this persona type
+        const matchedProfile = personaProfiles.find(p => p.personaType === persona.id && p.psycheProfile);
+
+        const systemPrompt = buildPersonaQuestionPrompt(ctx, persona, activeC, company, existing, allNewQs, matchedProfile);
+        const userMsg = `TARGET COMPANY: ${company}
+COMPANY URL: ${companyUrl || ""}
+INDUSTRY: ${industry}
+PERSONA: ${persona.label}
+
+Research ${company} and generate exactly 12 buyer-intent questions from the authentic mindset of a ${ctx.title}.
+${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyIntel field (already captured)."}`;
+
+        const result = await callClaude(systemPrompt, userMsg, 90000);
+
+        const personaQs = (result.questions || []).map((q, i) => ({
+          id: `ai-${coKey}-${persona.id}-${Date.now()}-${i}`,
+          query: q.q,
+          persona: persona.id,
+          stage: q.s,
+          cluster: q.c,
+          lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
+          source: "ai",
+          classification: verifyClassification(q, company),
+          company, companyUrl, generatedAt: now,
+          searchContext: q.context || "",
+          confidence: q.confidence || 0.85,
+          dedupHash: questionHash(q.q),
+          targetPersona: matchedProfile ? matchedProfile.name : null,
+        }));
+
+        allNewQs = [...allNewQs, ...personaQs];
+
+        // Capture company intel from whichever persona call returns it first
+        if (!companyIntelSaved && result.companyIntel) {
+          const intel = { companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel };
+          await saveCompanyIntel(intel);
+          setCompanyIntel(intel);
+          companyIntelSaved = true;
+        }
       }
 
-      let userMsg = `TARGET COMPANY: ${company}\n`;
-      if (companyUrl) userMsg += `COMPANY URL: ${companyUrl}\n`;
-      userMsg += `INDUSTRY: ${industry}\n\n`;
-      userMsg += `ACTIVE PERSONAS: ${activeP.map(p => `${p.id} (${p.label})`).join(", ")}\n`;
-      userMsg += `ACTIVE CLUSTERS: ${activeC.join(", ")}\n\n`;
-      userMsg += `Research ${company} thoroughly using web search. Focus on their CURRENT market position, recent developments, and competitive dynamics. Generate 15-25 new buyer-intent questions.`;
-
-      const stepTimer = setInterval(() => setAiStep(prev => prev < 4 ? prev + 1 : prev), 10000);
-      const result = await callClaude(systemPrompt, userMsg, 120000);
-      clearInterval(stepTimer);
-
-      setAiStep(4);
-      const now = new Date().toISOString();
-      const coKey = company.toLowerCase().replace(/\s+/g, "-");
-
-      const newQs = (result.questions || []).map((q, i) => ({
-        id: `ai-${coKey}-${Date.now()}-${i}`,
-        query: q.q,
-        persona: q.p,
-        stage: q.s,
-        cluster: q.c,
-        lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
-        source: "ai",
-        classification: verifyClassification(q, company),
-        company: company,
-        companyUrl: companyUrl,
-        generatedAt: now,
-        searchContext: q.context || "",
-        confidence: q.confidence || 0.8,
-        dedupHash: questionHash(q.q),
-        targetPersona: targetProfile ? targetProfile.name : null,
-      }));
-
+      setAiCurrentPersona(null);
       setAiStep(5);
-      await saveQuestions(newQs);
+      await saveQuestions(allNewQs);
 
-      if (result.companyIntel) {
-        const intel = {
-          companyKey: coKey,
-          companyName: company,
-          url: companyUrl,
-          industry: industry,
-          lastResearchedAt: now,
-          ...result.companyIntel,
-        };
-        await saveCompanyIntel(intel);
-        setCompanyIntel(intel);
-      }
-
-      for (const q of newQs.filter(q => q.classification === "macro")) {
-        await saveMacro(q);
-      }
-
-      // Background: sync each question + macros + intel to Firebase
+      // Background Firebase sync
       (async () => {
-        for (const q of newQs) {
+        for (const q of allNewQs) {
           try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {}
           await new Promise(r => setTimeout(r, 50));
         }
-        for (const q of newQs.filter(q => q.classification === "macro")) {
+        for (const q of allNewQs.filter(q => q.classification === "macro")) {
           try { await db.saveWithId("m1_macros", q.dedupHash, { ...q, updated_at: now }); } catch {}
-        }
-        if (result.companyIntel) {
-          try { await db.saveWithId("m1_company_intel", coKey, { companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel, updated_at: now }); } catch {}
         }
       })();
 
       setAiStep(6);
-      setAiQuestions(newQs);
-
-      setSelectedQs(prev => {
-        const next = new Set(prev);
-        newQs.forEach(q => next.add(q.id));
-        return next;
-      });
+      setAiQuestions(allNewQs);
+      setSelectedQs(prev => { const next = new Set(prev); allNewQs.forEach(q => next.add(q.id)); return next; });
 
       const stats = await getKnowledgeBaseStats();
       setKbStats(stats);
-      setCreditsUsed(prev => prev + 0.08);
+      setCreditsUsed(prev => prev + 0.08 * activeP.length);
 
     } catch (err) {
       setAiError(err.message);
       setAiStep(0);
     } finally {
       setAiLoading(false);
+      setAiCurrentPersona(null);
     }
   };
 
@@ -1654,27 +1853,30 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   AI RESEARCH IN PROGRESS
                 </span>
                 <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                  ~$0.08 estimated
+                  ~${(0.08 * (activePersonas.size || 1)).toFixed(2)} estimated
                 </span>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {AI_STEPS.slice(0, -1).map((step, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{
-                      width: 6, height: 6, borderRadius: "50%",
-                      background: i < aiStep ? t.green : i === aiStep ? t.brand : t.border,
-                      transition: "background 0.3s",
-                    }} />
-                    <span style={{
-                      fontSize: 11, fontFamily: "var(--mono)",
-                      color: i < aiStep ? t.green : i === aiStep ? t.text : t.textGhost,
-                      fontWeight: i === aiStep ? 600 : 400,
-                    }}>
-                      {step}
-                    </span>
+              {aiCurrentPersona ? (
+                <>
+                  <div style={{ fontSize: 12, color: t.brand, fontWeight: 600, fontFamily: "var(--mono)" }}>
+                    Generating {aiCurrentPersona.short} questions...
                   </div>
-                ))}
-              </div>
+                  <div style={{ fontSize: 11, color: t.textSec, marginTop: 4, fontFamily: "var(--mono)" }}>
+                    {aiCurrentPersona.idx + 1} of {aiCurrentPersona.total} personas
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%",
+                        width: `${((aiCurrentPersona.idx + 1) / aiCurrentPersona.total) * 100}%`,
+                        background: t.brand, transition: "width 0.5s ease", borderRadius: 2,
+                      }} />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: t.brand, fontFamily: "var(--mono)" }}>{AI_STEPS[aiStep]}</div>
+              )}
             </div>
           )}
 
