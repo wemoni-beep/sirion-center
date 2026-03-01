@@ -971,7 +971,7 @@ export default function QuestionGenerator({ onNavigate }) {
 
   // ── Enrich & Map Questions (retroactive classification) ──
   const enrichQuestions = async () => {
-    const allQs = [...questions]; // includes static + kb + ai + pipeline
+    const allQs = [...questions];
     if (allQs.length === 0) return;
     setEnrichmentLoading(true);
     setEnrichmentProgress({ done: 0, total: allQs.length });
@@ -980,89 +980,80 @@ export default function QuestionGenerator({ onNavigate }) {
     const batches = [];
     for (let i = 0; i < allQs.length; i += BATCH) batches.push(allQs.slice(i, i + BATCH));
 
-    // Flatten all criteria ids for the prompt
-    const allCriteria = Object.entries(DECISION_CRITERIA).flatMap(([pid, crit]) =>
-      crit.map(c => `${pid}.${c.id}`)
-    ).join(", ");
+    const allCriteria = Object.entries(DECISION_CRITERIA)
+      .flatMap(([pid, crit]) => crit.map(c => `${pid}.${c.id}`)).join(", ");
 
-    let enriched = [];
+    const systemPrompt = `Classify CLM buyer-intent questions. For each question return JSON with these fields:
+- personaFit: 1-10 (1=any executive, 10=only this exact persona would ask this)
+- bestPersona: gc|cpo|cio|vplo|cto|cm|pd|cfo (best fit persona)
+- intentType: generic|category|vendor|decision
+  generic=anyone, no specificity; category=CLM-level, no vendor; vendor=names a specific vendor; decision=comparison/ROI/evaluation
+- volumeTier: high|medium|niche (high=thousands/month, niche=dozens/month)
+- criterion: one id from this list (best match) or null: ${allCriteria}
+
+OUTPUT: JSON array ONLY. No explanation. Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volumeTier":"niche","criterion":"gc.playbook_enforcement"}]`;
+
+    // Enrichment lookup: hash -> enrichment fields
+    const enrichmentMap = new Map();
+    const now = new Date().toISOString();
+
     for (let bi = 0; bi < batches.length; bi++) {
       const batch = batches[bi];
-      const systemPrompt = `You enrich CLM buyer-intent questions with 4 classification fields.
-
-PERSONA ROLES: gc=General Counsel, cpo=Chief Procurement Officer, cio=CIO, vplo=VP Legal Ops, cto=VP IT/CTO, cm=Contract Manager, pd=Procurement Director, cfo=CFO
-
-INTENT TYPES:
-- generic: Could be asked by anyone, no vendor or category specificity (e.g. "what is contract management")
-- category: CLM category-level question, no specific vendor (e.g. "how does AI help with contract review")
-- vendor: Mentions a specific vendor by name
-- decision: Evaluation/comparison/ROI/validation question indicating active buying
-
-VOLUME TIERS:
-- high: Thousands search this monthly (generic awareness)
-- medium: Hundreds search this (category evaluation)
-- niche: Few dozen search this (specific evaluation, deep decision)
-
-DECISION CRITERIA IDs (for criterion field — pick the single best match, or null):
-${allCriteria}
-
-For each question, return:
-- personaFit: 1-10 (1=any exec could ask, 10=only this exact persona would ask this)
-- bestPersona: the persona id that fits the question best (gc/cpo/cio/vplo/cto/cm/pd/cfo)
-- intentType: generic|category|vendor|decision
-- volumeTier: high|medium|niche
-- criterion: best matching criterion id from the list above (e.g. "gc.playbook_enforcement"), or null
-
-OUTPUT: valid JSON array only — [{idx,personaFit,bestPersona,intentType,volumeTier,criterion}]`;
-
-      const userMsg = batch.map((q, i) => `${i}: persona=${q.persona} | "${q.query}"`).join("\n");
+      const userMsg = batch.map((q, i) => `${i}: persona=${q.persona||"?"} | "${q.query}"`).join("\n");
 
       try {
-        const raw = await callClaudeFast(systemPrompt, userMsg, 30000);
-        // callClaudeFast returns text, parse as JSON
-        let results = [];
-        try {
-          const txt = typeof raw === "string" ? raw : JSON.stringify(raw);
-          const match = txt.match(/\[[\s\S]*\]/);
-          if (match) results = JSON.parse(match[0]);
-        } catch {}
+        const raw = await callClaudeFast(systemPrompt, userMsg, 4000);
+        // callClaudeFast returns already-parsed JS value
+        let results = Array.isArray(raw) ? raw : (raw?.results || raw?.data || []);
+        if (!Array.isArray(results)) results = [];
 
         results.forEach(r => {
           const q = batch[r.idx];
           if (!q) return;
-          enriched.push({
-            ...q,
-            personaFit: r.personaFit || null,
+          const hash = questionHash(q.query);
+          enrichmentMap.set(hash, {
+            personaFit: typeof r.personaFit === "number" ? r.personaFit : null,
             bestPersona: r.bestPersona || q.persona,
             intentType: r.intentType || null,
             volumeTier: r.volumeTier || null,
             criterion: r.criterion || null,
-            enrichedAt: new Date().toISOString(),
+            enrichedAt: now,
           });
         });
-        // Fill any that Claude skipped
-        batch.forEach((q, i) => {
-          if (!results.find(r => r.idx === i)) enriched.push(q);
-        });
-      } catch {
-        batch.forEach(q => enriched.push(q));
+      } catch (e) {
+        console.warn("Enrichment batch failed:", e.message);
       }
 
       setEnrichmentProgress({ done: Math.min((bi + 1) * BATCH, allQs.length), total: allQs.length });
     }
 
-    // Save enriched back to IndexedDB + Firebase
-    const toSave = enriched.filter(q => q.enrichedAt);
+    // Apply enrichment map back to questions and save to IndexedDB
+    // Ensure every question has company + dedupHash so getQuestionsForCompany finds them
+    const toSave = allQs
+      .map(q => {
+        const hash = questionHash(q.query);
+        const enrichment = enrichmentMap.get(hash);
+        if (!enrichment) return null; // skip un-enriched
+        return {
+          ...q,
+          company: q.company || company,           // critical: needed for IndexedDB query
+          dedupHash: q.dedupHash || hash,          // needed for Firebase sync
+          ...enrichment,
+        };
+      })
+      .filter(Boolean);
+
     await saveQuestions(toSave);
-    const now = new Date().toISOString();
+
+    // Firebase background sync
     (async () => {
       for (const q of toSave) {
-        try { await db.saveWithId("m1_questions_v2", q.dedupHash || q.id, { ...q, updated_at: now }); } catch {}
+        try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {}
         await new Promise(r => setTimeout(r, 30));
       }
     })();
 
-    // Reload KB questions so enrichment fields appear in state
+    // Reload KB — now includes enriched static/pipeline questions too
     try {
       const refreshed = await getQuestionsForCompany(company);
       setKbQuestions(refreshed);
