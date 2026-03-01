@@ -699,6 +699,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const [enrichmentStartTime, setEnrichmentStartTime] = useState(null);
   const [enrichmentElapsed, setEnrichmentElapsed] = useState(0);
   const [enrichmentResult, setEnrichmentResult] = useState(null); // { count, total } on complete
+  const [autoEnrichPending, setAutoEnrichPending] = useState(false); // auto-trigger after generation
   const [filterIntentType, setFilterIntentType] = useState("all");
   const [filterVolumeTier, setFilterVolumeTier] = useState("all");
 
@@ -735,6 +736,14 @@ export default function QuestionGenerator({ onNavigate }) {
     }, 1000);
     return () => clearInterval(interval);
   }, [enrichmentLoading]);
+
+  // ── Auto-enrich after generation completes ──
+  // Waits for aiLoading to go false, then triggers enrichment with fresh question state
+  useEffect(() => {
+    if (!autoEnrichPending || aiLoading || enrichmentLoading || questions.length === 0) return;
+    setAutoEnrichPending(false);
+    enrichQuestions();
+  }, [autoEnrichPending, aiLoading, enrichmentLoading, questions.length]); // eslint-disable-line
 
   // ── One-time migration: save pipeline questions to KB so they persist ──
   useEffect(() => {
@@ -1187,6 +1196,7 @@ CRITICAL: Make questions HYPER-PERSONALIZED to this person. Reference their spec
         setSelectedQs(prev => { const next = new Set(prev); newQs.forEach(q => next.add(q.id)); return next; });
         const stats = await getKnowledgeBaseStats(); setKbStats(stats);
         setCreditsUsed(prev => prev + 0.08);
+        setAutoEnrichPending(true); // auto-trigger enrichment after single-persona generation
         return;
       }
 
@@ -1265,6 +1275,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
       const stats = await getKnowledgeBaseStats();
       setKbStats(stats);
       setCreditsUsed(prev => prev + 0.08 * activeP.length);
+      setAutoEnrichPending(true); // auto-trigger Intent/Fit/Criterion mapping after generation
 
     } catch (err) {
       setAiError(err.message);
@@ -2219,15 +2230,16 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             {generated && questions.length > 0 && (
               <button
                 onClick={enrichQuestions}
-                disabled={enrichmentLoading}
-                title="Map all questions to personas, intent types, and decision criteria using AI"
+                disabled={enrichmentLoading || aiLoading}
+                title="Map all questions to personas, intent types, and decision criteria using AI. Runs automatically after generation."
                 style={{
-                  padding: "12px 20px", borderRadius: 8, cursor: enrichmentLoading ? "not-allowed" : "pointer",
+                  padding: "12px 20px", borderRadius: 8,
+                  cursor: (enrichmentLoading || aiLoading) ? "not-allowed" : "pointer",
                   background: "transparent", border: `1px solid #fbbf2440`, color: "#fbbf24",
                   fontSize: 13, fontWeight: 700, fontFamily: "var(--mono)", textTransform: "uppercase",
-                  letterSpacing: 1, opacity: enrichmentLoading ? 0.4 : 1, transition: "all 0.2s",
+                  letterSpacing: 1, opacity: (enrichmentLoading || aiLoading) ? 0.4 : 1, transition: "all 0.2s",
                 }}>
-                {enrichmentLoading ? "Mapping\u2026" : "\u2728 Enrich & Map"}
+                {enrichmentLoading ? "Mapping\u2026" : autoEnrichPending ? "Auto-mapping\u2026" : "\u2728 Re-enrich"}
               </button>
             )}
             {generated && (
@@ -2648,7 +2660,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </h2>
             <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
               Per-persona evaluation criteria. Score Sirion 1–10 on each criterion.
-              Run <strong style={{ color: "#fbbf24" }}>Enrich & Map</strong> from the Questions tab first to populate question coverage.
+              Question coverage populates automatically after generation. Use <strong style={{ color: "#fbbf24" }}>Re-enrich</strong> to refresh after adding new questions.
             </p>
           </div>
 
@@ -2827,7 +2839,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   <span style={{ fontSize: 11, color: "#fbbf24", fontFamily: "var(--mono)" }}>-1 to -3 Partial</span>
                   <span style={{ fontSize: 11, color: "#f87171", fontFamily: "var(--mono)" }}>&gt;-3 Critical gap</span>
                   <span style={{ fontSize: 11, color: t.textDim, marginLeft: "auto", fontFamily: "var(--mono)" }}>
-                    Scores saved in session. Run Enrich & Map to populate question coverage.
+                    Scores saved in session. Question coverage auto-populates after generation.
                   </span>
                 </div>
               </div>
