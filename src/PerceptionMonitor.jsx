@@ -1170,7 +1170,7 @@ export default function App() {
                       const done = scanProgress.llmDone?.[lid] || 0;
                       const total = queries.length;
                       const pct = total ? Math.round((done / total) * 100) : 0;
-                      const isActive = scanProgress.currentLLM === lid && scanProgress.phase !== "analyzing";
+                      const isActive = (scanProgress.activeLLMs || []).includes(lid) && scanProgress.phase === "scanning";
                       const meta = LLM_META[lid];
                       return (
                         <div key={lid}>

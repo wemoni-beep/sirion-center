@@ -485,6 +485,9 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
 
   const totalSteps = queries.length * llmIds.length;
 
+  // Per-LLM completion counter — persists across all queries, read by PerceptionMonitor UI
+  const llmDone = Object.fromEntries(llmIds.map(id => [id, 0]));
+
   const onRetry = (attempt, maxRetries, delay, reason) => {
     retryCount++;
     onProgress?.({
@@ -493,6 +496,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       total: totalSteps,
       status: `Rate limited (${reason}) — retry ${attempt}/${maxRetries} in ${Math.round(delay / 1000)}s...`,
       percent: Math.round((results.length / queries.length) * 70),
+      llmDone: { ...llmDone },
+      activeLLMs: [],
     });
   };
 
@@ -505,55 +510,90 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     const q = queries[qi];
     const analyses = {};
 
-    // ── Wave 1: Ask ALL LLMs in PARALLEL (3–4x faster than sequential) ──
+    // Tracks which LLMs are still in-flight for this query (resets each query)
+    const activeSet = new Set(llmIds);
+
+    // ── Wave 1: Ask ALL LLMs in PARALLEL — each updates llmDone as it finishes ──
     onProgress?.({
       phase: "scanning",
       current: qi * llmIds.length,
       total: totalSteps,
       query: q.query.substring(0, 60),
-      llm: llmIds.join("+"),
-      status: `Q${qi + 1}/${queries.length}: Asking ${llmIds.join(", ")} in parallel...`,
+      status: `Q${qi + 1}/${queries.length}: Sending to ${llmIds.join(", ")}...`,
       percent: Math.round((qi / queries.length) * 70),
+      llmDone: { ...llmDone },
+      activeLLMs: [...activeSet],
     });
 
     if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
 
-    // Fire all LLM calls simultaneously — throttle() inside each caller spaces them if needed
-    const askResults = await Promise.allSettled(
-      llmIds.map(lid => {
-        const caller = LLM_CALLERS[lid];
-        if (!caller) return Promise.resolve({ ok: false, error: "Unknown LLM" });
-        return caller(q.query, onRetry);
-      })
-    );
+    // Fire all LLM calls simultaneously. Each resolves individually and emits progress.
+    const llmPromises = llmIds.map(lid => {
+      const caller = LLM_CALLERS[lid];
+      if (!caller) {
+        activeSet.delete(lid);
+        return Promise.resolve({ lid, result: { ok: false, error: "Unknown LLM" } });
+      }
+      return caller(q.query, onRetry)
+        .then(result => {
+          llmDone[lid]++;
+          activeSet.delete(lid);
+          onProgress?.({
+            phase: "scanning",
+            current: qi * llmIds.length + (llmIds.length - activeSet.size),
+            total: totalSteps,
+            query: q.query.substring(0, 60),
+            status: `Q${qi + 1}/${queries.length}: ${lid} responded`,
+            percent: Math.round((qi / queries.length) * 70),
+            llmDone: { ...llmDone },
+            activeLLMs: [...activeSet],
+          });
+          return { lid, result };
+        })
+        .catch(err => {
+          llmDone[lid]++;
+          activeSet.delete(lid);
+          onProgress?.({
+            phase: "scanning",
+            current: qi * llmIds.length + (llmIds.length - activeSet.size),
+            total: totalSteps,
+            query: q.query.substring(0, 60),
+            status: `Q${qi + 1}/${queries.length}: ${lid} error`,
+            percent: Math.round((qi / queries.length) * 70),
+            llmDone: { ...llmDone },
+            activeLLMs: [...activeSet],
+          });
+          return { lid, result: { ok: false, error: err.message } };
+        });
+    });
+
+    const askResultsList = await Promise.all(llmPromises);
     apiCalls += llmIds.length;
 
     // ── Wave 2: Batch-analyze ALL responses in ONE Claude call ──
-    // (3 separate analysis calls → 1 batched call = 50% fewer Claude API calls)
     onProgress?.({
       phase: "analyzing",
       current: qi * llmIds.length + llmIds.length,
       total: totalSteps,
       query: q.query.substring(0, 60),
-      llm: llmIds.join("+"),
       status: `Q${qi + 1}/${queries.length}: Analyzing responses...`,
       percent: Math.round(((qi + 0.5) / queries.length) * 70),
+      llmDone: { ...llmDone },
+      activeLLMs: [],
     });
 
     // Collect successful responses for batch analysis
     const successfulResponses = {};
     const responseTexts = {};
-    llmIds.forEach((llmId, i) => {
-      const settled = askResults[i];
-      const response = settled.status === "fulfilled" ? settled.value : null;
-      if (response?.ok) {
-        successfulResponses[llmId] = response.text;
-        responseTexts[llmId] = response;
+    askResultsList.forEach(({ lid, result }) => {
+      if (result?.ok) {
+        successfulResponses[lid] = result.text;
+        responseTexts[lid] = result;
       } else {
-        const errMsg = response?.error || settled.reason?.message || "LLM call failed";
-        errors.push({ qid: q.id, llm: llmId, error: errMsg });
+        const errMsg = result?.error || "LLM call failed";
+        errors.push({ qid: q.id, llm: lid, error: errMsg });
         partialFailures++;
-        analyses[llmId] = { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg };
+        analyses[lid] = { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg };
       }
     });
 
@@ -632,6 +672,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       query: q.query.substring(0, 60),
       status: `${qi + 1}/${queries.length} questions done`,
       percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
+      llmDone: { ...llmDone },
+      activeLLMs: [],
     });
 
     // Minimal gap between queries — throttle() inside each LLM caller handles rate limits.
@@ -673,6 +715,8 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
         ? `Scan complete! (${retryCount} retries handled)`
         : "Scan complete!",
     percent: 100,
+    llmDone: { ...llmDone },
+    activeLLMs: [],
   });
 
   return scanResult;
