@@ -728,7 +728,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const pipelineMigratedRef = useRef(false);
 
   // ── Enrichment elapsed timer ──
-  React.useEffect(() => {
+  useEffect(() => {
     if (!enrichmentLoading) return;
     const interval = setInterval(() => {
       setEnrichmentElapsed(prev => prev + 1);
