@@ -326,6 +326,267 @@ function detectPersonaType(title) {
   return "cm";
 }
 
+/* ── Per-Persona Role Contexts ────────────────────────── */
+// Defines the cognitive lens, KPIs, vocabulary, and boundaries for each persona.
+// Each persona's questions are generated FROM this mindset, not labeled with it after the fact.
+const PERSONA_CONTEXTS = {
+  gc: {
+    title: "General Counsel",
+    lens: "Legal risk, regulatory compliance, and contract governance",
+    kpis: ["contract dispute rate", "clause risk exposure", "time to negotiate", "legal spend per contract"],
+    priorities: [
+      "Enforcing playbook standards on inbound third-party paper at scale",
+      "Reducing litigation risk from ambiguous or missing contract terms",
+      "GDPR, DPA, and regulatory compliance across all agreements",
+      "M&A contract due diligence velocity and completeness",
+      "Controlling external counsel spend through better self-serve tooling",
+    ],
+    language: ["indemnification", "governing law", "playbook", "redlines", "material breach", "force majeure", "regulatory exposure", "third-party paper", "clause risk", "obligations"],
+    wouldAsk: ["third-party paper handling", "clause risk scoring", "litigation prevention", "playbook enforcement", "regulatory compliance"],
+    wouldNotAsk: ["procurement savings", "supplier performance", "IT integration specs", "board ROI presentation"],
+  },
+  cpo: {
+    title: "Chief Procurement Officer",
+    lens: "Procurement performance, supplier accountability, and spend optimization",
+    kpis: ["savings realized vs contracted", "supplier SLA compliance %", "spend under management", "on-time renewal %"],
+    priorities: [
+      "Visibility into whether suppliers are actually delivering what contracts commit to",
+      "Tracking obligation milestones and renewal dates automatically",
+      "Eliminating rogue spend and off-contract buying across business units",
+      "Supplier risk management and ESG compliance obligations",
+      "Connecting contract terms to real procurement outcomes and savings",
+    ],
+    language: ["spend under management", "supplier performance", "obligation tracking", "rogue spend", "vendor governance", "sourcing", "contract compliance", "renewal"],
+    wouldAsk: ["supplier obligation tracking", "spend analysis from contracts", "vendor compliance", "auto-renewal alerts", "procurement efficiency"],
+    wouldNotAsk: ["legal clause redlining", "playbook governance", "IT API specs", "financial statement impact"],
+  },
+  cio: {
+    title: "Chief Information Officer",
+    lens: "Technology infrastructure, data security, and enterprise integration",
+    kpis: ["integration completeness", "security posture", "IT contract spend", "implementation success rate"],
+    priorities: [
+      "Integrating CLM with existing ERP/CRM/HRIS stack (Salesforce, SAP, Workday, ServiceNow)",
+      "Data security, residency, and sovereignty of contract content at rest and in transit",
+      "Managing the IT contract lifecycle for software, cloud, and SaaS agreements",
+      "Change management and user adoption across the enterprise",
+      "AI governance and responsible AI policies applied to contract workflows",
+    ],
+    language: ["API", "integration", "SSO", "data residency", "security posture", "tech stack", "scalability", "cloud", "SaaS", "change management", "implementation"],
+    wouldAsk: ["ERP/CRM integration", "security certifications", "API capabilities", "data privacy compliance", "implementation roadmap"],
+    wouldNotAsk: ["legal playbook governance", "procurement savings", "external counsel spend", "clause risk scoring"],
+  },
+  vplo: {
+    title: "VP Legal Operations",
+    lens: "Legal department efficiency, process automation, and measurable output",
+    kpis: ["cost per contract", "cycle time", "contracts per headcount", "legal team utilization rate"],
+    priorities: [
+      "Automating repetitive contract workflows to free lawyers for high-value work",
+      "Building dashboard visibility into legal department performance and throughput",
+      "Rationalizing the legal tech stack — fewer point solutions, more integration",
+      "Scaling contract volume without scaling headcount",
+      "Data-driven reporting on legal operations metrics to GC and CFO",
+    ],
+    language: ["workflow automation", "cycle time", "matter management", "legal ops metrics", "self-service", "intake", "playbook automation", "tech stack rationalization"],
+    wouldAsk: ["workflow automation", "legal metrics dashboards", "self-service contract tools", "tech stack consolidation", "headcount efficiency"],
+    wouldNotAsk: ["supplier performance", "IT security architecture", "board-level ROI", "procurement compliance"],
+  },
+  cto: {
+    title: "VP IT / CTO",
+    lens: "Technical architecture, AI/ML capabilities, and build-vs-buy decisions",
+    kpis: ["system uptime", "API response time", "AI model accuracy", "deployment velocity"],
+    priorities: [
+      "Evaluating AI/ML training data quality and model explainability in CLM platforms",
+      "Build vs buy decisions for contract intelligence and extraction features",
+      "Enterprise scalability, multi-tenant architecture, and performance under load",
+      "Security architecture: SOC 2, penetration testing, zero-trust access model",
+      "Developer-friendly APIs for custom integrations with internal systems",
+    ],
+    language: ["machine learning", "NLP", "API-first", "microservices", "SOC 2", "AI model", "training data", "inference", "scalability", "architecture"],
+    wouldAsk: ["AI model quality and training approach", "API-first architecture", "enterprise scalability", "security architecture", "technical implementation requirements"],
+    wouldNotAsk: ["legal playbook governance", "procurement savings", "financial statement impact", "supplier management"],
+  },
+  cm: {
+    title: "Contract Manager",
+    lens: "Day-to-day contract execution, turnaround speed, and deadline management",
+    kpis: ["contract turnaround time", "on-time renewals %", "template compliance rate", "amendment cycle time"],
+    priorities: [
+      "Getting contracts executed faster with fewer manual steps and email chains",
+      "Never missing a renewal deadline, milestone obligation, or expiry date",
+      "Managing amendment cycles and version control without creating chaos",
+      "Having a single searchable repository for all executed contracts",
+      "Reducing back-and-forth with counterparties and internal approvers",
+    ],
+    language: ["template", "turnaround", "renewal reminder", "amendment", "version control", "approval workflow", "counterparty", "executed contract", "repository", "clause library"],
+    wouldAsk: ["template management", "renewal alerts", "approval workflow speed", "amendment tracking", "contract search and repository"],
+    wouldNotAsk: ["board reporting", "enterprise security architecture", "AI model training", "financial risk exposure"],
+  },
+  pd: {
+    title: "Procurement Director",
+    lens: "Vendor negotiation, contract compliance, and sourcing process efficiency",
+    kpis: ["negotiation cycle time", "savings vs target", "contract compliance rate", "vendor onboarding time"],
+    priorities: [
+      "Speeding up vendor contract negotiation without sacrificing favorable terms",
+      "Tracking whether vendor deliverables actually match contracted commitments",
+      "Managing a growing vendor base across multiple spend categories",
+      "Standardizing contract templates for common vendor types",
+      "Avoiding auto-renewal traps and identifying expiring contracts proactively",
+    ],
+    language: ["vendor", "negotiation", "sourcing", "RFP", "supplier contract", "deliverables", "auto-renewal", "spend category", "preferred supplier", "contract terms"],
+    wouldAsk: ["vendor negotiation support", "procurement templates", "supplier contract compliance", "auto-renewal management", "category spend from contracts"],
+    wouldNotAsk: ["legal risk management", "IT security specs", "financial statement impact", "AI model architecture"],
+  },
+  cfo: {
+    title: "CFO",
+    lens: "Financial risk, revenue recognition, and contract-driven P&L impact",
+    kpis: ["contract-driven revenue at risk", "obligation cost exposure", "contract leakage $", "renewal revenue retained"],
+    priorities: [
+      "Understanding total financial exposure hidden in contract obligations across the portfolio",
+      "Revenue recognition compliance (ASC 606/IFRS 15) tied to contract milestones and deliverables",
+      "Identifying and capturing contract value leakage — missed discounts, SLA credits, price escalations",
+      "Board-level reporting on contract portfolio risk and unrealized value",
+      "Justifying CLM ROI to the CEO with concrete financial metrics",
+    ],
+    language: ["revenue recognition", "financial exposure", "contract value leakage", "obligation cost", "P&L impact", "ASC 606", "risk-adjusted", "financial controls", "ROI", "board reporting"],
+    wouldAsk: ["financial risk from contracts", "revenue recognition compliance", "contract leakage", "ROI calculation", "CFO dashboard for contract portfolio"],
+    wouldNotAsk: ["legal playbook governance", "IT API specs", "supplier management", "legal team efficiency metrics"],
+  },
+};
+
+/* ── Per-Persona Prompt Builder ────────────────────────── */
+function buildPersonaQuestionPrompt(ctx, persona, clusters, company, existing, alreadyGenerated, matchedProfile) {
+  let prompt = `You generate buyer-intent questions that a ${ctx.title} would type into AI assistants (ChatGPT, Perplexity, Claude, Gemini) when evaluating CLM software.
+
+PERSONA LENS — ${ctx.title.toUpperCase()}:
+${ctx.lens}
+
+KPIs they are measured on: ${ctx.kpis.join(", ")}
+Their priorities:
+${ctx.priorities.map(p => `- ${p}`).join("\n")}
+
+Their vocabulary: ${ctx.language.join(", ")}
+They WOULD ask about: ${ctx.wouldAsk.join(", ")}
+They would NEVER ask about: ${ctx.wouldNotAsk.join(", ")}`;
+
+  if (matchedProfile?.psycheProfile) {
+    prompt += `\n\nREAL DECISION MAKER PROFILE — make questions hyper-specific to this person:
+Name: ${matchedProfile.name} — ${matchedProfile.title} at ${matchedProfile.company}
+Decision style: ${matchedProfile.psycheProfile.decisionStyle}
+Risk tolerance: ${matchedProfile.psycheProfile.riskTolerance}
+Buying triggers: ${(matchedProfile.psycheProfile.buyingTriggers || []).join(", ")}
+Pain points: ${(matchedProfile.painPoints || []).slice(0, 3).map(p => p.pain).join("; ")}
+Priorities: ${(matchedProfile.priorities || []).join(", ")}
+Profile: ${matchedProfile.researchSummary || ""}`;
+  }
+
+  prompt += `\n\nTOPIC CLUSTERS TO COVER: ${clusters.join(", ")}
+
+QUESTION TYPES:
+- MACRO (~40%): Industry-wide, no specific vendor mentioned
+- MICRO (~60%): Reference ${company} or specific competitors
+
+JOURNEY STAGES: awareness, discovery, consideration, decision, validation
+CLM LIFECYCLE: pre-signature, post-signature, full-stack
+
+RULES:
+- Generate exactly 12 questions
+- EVERY question must authentically reflect the ${ctx.title}'s cognitive lens and vocabulary
+- Questions must sound like what THIS specific role would type — not what any generic executive asks
+- 10-30 words each, natural phrasing (as typed into a search bar, not formal language)
+- Cover at least 3 different journey stages and all 3 lifecycle stages`;
+
+  const allExisting = [...existing, ...alreadyGenerated];
+  if (allExisting.length > 0) {
+    prompt += `\n\nDO NOT DUPLICATE THESE QUESTIONS:\n${allExisting.slice(0, 30).map((q, i) => `${i + 1}. ${q.query || q.q}`).join("\n")}`;
+  }
+
+  prompt += `\n\nOUTPUT — valid JSON only, no markdown:
+{"companyIntel":{"keyFindings":[],"competitors":[],"recentNews":[],"marketPosition":""},"questions":[{"q":"...","s":"stage","c":"cluster","l":"lifecycle","classification":"macro|micro","context":"why this persona would ask this","confidence":0.9}]}`;
+
+  return prompt;
+}
+
+/* ── Decision Criteria per Persona ───────────────────── */
+const DECISION_CRITERIA = {
+  gc: [
+    { id: "playbook_enforcement", label: "Playbook Enforcement at Scale", weight: 9 },
+    { id: "third_party_paper", label: "Third-Party Paper Handling", weight: 8 },
+    { id: "regulatory_compliance", label: "Regulatory Compliance (GDPR/DPA)", weight: 9 },
+    { id: "clause_risk_scoring", label: "Clause Risk Scoring", weight: 7 },
+    { id: "ma_due_diligence", label: "M&A Due Diligence Velocity", weight: 7 },
+    { id: "litigation_prevention", label: "Litigation Risk Prevention", weight: 8 },
+    { id: "external_counsel_control", label: "External Counsel Spend Control", weight: 6 },
+  ],
+  cpo: [
+    { id: "supplier_obligation_tracking", label: "Supplier Obligation Tracking", weight: 9 },
+    { id: "spend_visibility", label: "Spend Under Management Visibility", weight: 8 },
+    { id: "rogue_spend_control", label: "Rogue Spend Control", weight: 7 },
+    { id: "auto_renewal_mgmt", label: "Auto-Renewal Management", weight: 8 },
+    { id: "vendor_compliance", label: "Vendor Compliance Tracking", weight: 7 },
+    { id: "supplier_risk", label: "Supplier Risk & ESG Compliance", weight: 6 },
+  ],
+  cio: [
+    { id: "erp_crm_integration", label: "ERP/CRM Integration Depth", weight: 9 },
+    { id: "data_security", label: "Data Security & Residency", weight: 9 },
+    { id: "api_capabilities", label: "API Capabilities", weight: 8 },
+    { id: "sso_access", label: "SSO & Access Management", weight: 7 },
+    { id: "ai_governance", label: "AI Governance & Explainability", weight: 7 },
+    { id: "change_management", label: "Change Management & Adoption", weight: 6 },
+  ],
+  vplo: [
+    { id: "workflow_automation", label: "Workflow Automation", weight: 9 },
+    { id: "cycle_time_reduction", label: "Cycle Time Reduction", weight: 9 },
+    { id: "self_service_contracts", label: "Self-Service Contract Tools", weight: 8 },
+    { id: "headcount_efficiency", label: "Headcount Efficiency (contracts/FTE)", weight: 8 },
+    { id: "legal_metrics_dashboard", label: "Legal Metrics Dashboard", weight: 7 },
+    { id: "tech_stack_consolidation", label: "Tech Stack Rationalization", weight: 7 },
+  ],
+  cto: [
+    { id: "ai_model_quality", label: "AI Model Quality & Accuracy", weight: 9 },
+    { id: "security_architecture", label: "Security Architecture (SOC 2)", weight: 9 },
+    { id: "api_first_architecture", label: "API-First Architecture", weight: 8 },
+    { id: "enterprise_scalability", label: "Enterprise Scalability", weight: 8 },
+    { id: "ai_training_data", label: "AI Training Data Quality", weight: 7 },
+    { id: "build_vs_buy", label: "Build vs Buy Flexibility", weight: 7 },
+  ],
+  cm: [
+    { id: "renewal_alerts", label: "Renewal & Deadline Alerts", weight: 9 },
+    { id: "approval_workflow_speed", label: "Approval Workflow Speed", weight: 9 },
+    { id: "template_management", label: "Template Management", weight: 8 },
+    { id: "amendment_tracking", label: "Amendment & Version Control", weight: 8 },
+    { id: "contract_repository", label: "Contract Search & Repository", weight: 8 },
+    { id: "counterparty_collab", label: "Counterparty Collaboration", weight: 7 },
+  ],
+  pd: [
+    { id: "vendor_negotiation_support", label: "Vendor Negotiation Support", weight: 8 },
+    { id: "auto_renewal_traps", label: "Auto-Renewal Trap Detection", weight: 8 },
+    { id: "supplier_contract_compliance", label: "Supplier Contract Compliance", weight: 8 },
+    { id: "procurement_templates", label: "Procurement Templates", weight: 7 },
+    { id: "category_spend_analysis", label: "Category Spend from Contracts", weight: 7 },
+    { id: "vendor_onboarding", label: "Vendor Onboarding Speed", weight: 6 },
+  ],
+  cfo: [
+    { id: "financial_exposure", label: "Financial Exposure Visibility", weight: 9 },
+    { id: "revenue_recognition", label: "Revenue Recognition Compliance (ASC 606)", weight: 9 },
+    { id: "contract_leakage", label: "Contract Value Leakage Detection", weight: 9 },
+    { id: "roi_measurement", label: "CLM ROI Measurement", weight: 8 },
+    { id: "board_reporting", label: "Board-Level Portfolio Reporting", weight: 7 },
+    { id: "financial_controls", label: "Financial Controls Integration", weight: 7 },
+  ],
+};
+
+/* ── Intent type display config ──────────────────────── */
+const INTENT_CONFIG = {
+  generic:   { label: "Generic",   color: "#94a3b8", bg: "rgba(148,163,184,0.12)", desc: "Industry-wide, no vendor" },
+  category:  { label: "Category",  color: "#67e8f9", bg: "rgba(103,232,249,0.12)", desc: "CLM category-level" },
+  vendor:    { label: "Vendor",    color: "#a78bfa", bg: "rgba(167,139,250,0.12)", desc: "Mentions specific vendor" },
+  decision:  { label: "Decision",  color: "#4ade80", bg: "rgba(74,222,128,0.12)",  desc: "Evaluation/comparison" },
+};
+const VOLUME_CONFIG = {
+  high:   { label: "High Vol",  color: "#fbbf24", bg: "rgba(251,191,36,0.12)" },
+  medium: { label: "Med Vol",   color: "#67e8f9", bg: "rgba(103,232,249,0.10)" },
+  niche:  { label: "Niche",     color: "#a78bfa", bg: "rgba(167,139,250,0.10)" },
+};
+
 /* ── AI Progress Steps ────────────────────────────────── */
 const AI_STEPS = [
   "Loading knowledge base\u2026",
@@ -426,8 +687,19 @@ export default function QuestionGenerator({ onNavigate }) {
   const [aiQuestions, setAiQuestions] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState(0);
+  const [aiCurrentPersona, setAiCurrentPersona] = useState(null); // { id, short, idx, total }
   const [aiError, setAiError] = useState("");
   const [companyIntel, setCompanyIntel] = useState(null);
+
+  // ── Enrichment state ──
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  const [enrichmentProgress, setEnrichmentProgress] = useState({ done: 0, total: 0 });
+  const [filterIntentType, setFilterIntentType] = useState("all");
+  const [filterVolumeTier, setFilterVolumeTier] = useState("all");
+
+  // ── Decision Matrix state ──
+  const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
+  const [decisionScores, setDecisionScores] = useState({}); // key: "gc.criterion_id" → score 1-10
 
   // ── Knowledge base state ──
   const [kbStats, setKbStats] = useState({ totalQuestions: 0, totalMacros: 0, companiesResearched: 0, totalPersonas: 0 });
@@ -595,9 +867,11 @@ export default function QuestionGenerator({ onNavigate }) {
       if (filterPersona !== "all" && q.persona !== filterPersona) return false;
       if (filterJurisdiction !== "all" && (q.jurisdiction || "Global") !== filterJurisdiction) return false;
       if (filterLifecycle !== "all" && (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack") !== filterLifecycle) return false;
+      if (filterIntentType !== "all" && q.intentType !== filterIntentType) return false;
+      if (filterVolumeTier !== "all" && q.volumeTier !== filterVolumeTier) return false;
       return true;
     });
-  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle]);
+  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier]);
 
   const jurisdictions = useMemo(() => {
     const set = new Set();
@@ -671,27 +945,130 @@ export default function QuestionGenerator({ onNavigate }) {
     generateAIQuestions();
   };
 
+  // ── Enrich & Map Questions (retroactive classification) ──
+  const enrichQuestions = async () => {
+    const allQs = [...questions]; // includes static + kb + ai + pipeline
+    if (allQs.length === 0) return;
+    setEnrichmentLoading(true);
+    setEnrichmentProgress({ done: 0, total: allQs.length });
+
+    const BATCH = 20;
+    const batches = [];
+    for (let i = 0; i < allQs.length; i += BATCH) batches.push(allQs.slice(i, i + BATCH));
+
+    // Flatten all criteria ids for the prompt
+    const allCriteria = Object.entries(DECISION_CRITERIA).flatMap(([pid, crit]) =>
+      crit.map(c => `${pid}.${c.id}`)
+    ).join(", ");
+
+    let enriched = [];
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const systemPrompt = `You enrich CLM buyer-intent questions with 4 classification fields.
+
+PERSONA ROLES: gc=General Counsel, cpo=Chief Procurement Officer, cio=CIO, vplo=VP Legal Ops, cto=VP IT/CTO, cm=Contract Manager, pd=Procurement Director, cfo=CFO
+
+INTENT TYPES:
+- generic: Could be asked by anyone, no vendor or category specificity (e.g. "what is contract management")
+- category: CLM category-level question, no specific vendor (e.g. "how does AI help with contract review")
+- vendor: Mentions a specific vendor by name
+- decision: Evaluation/comparison/ROI/validation question indicating active buying
+
+VOLUME TIERS:
+- high: Thousands search this monthly (generic awareness)
+- medium: Hundreds search this (category evaluation)
+- niche: Few dozen search this (specific evaluation, deep decision)
+
+DECISION CRITERIA IDs (for criterion field — pick the single best match, or null):
+${allCriteria}
+
+For each question, return:
+- personaFit: 1-10 (1=any exec could ask, 10=only this exact persona would ask this)
+- bestPersona: the persona id that fits the question best (gc/cpo/cio/vplo/cto/cm/pd/cfo)
+- intentType: generic|category|vendor|decision
+- volumeTier: high|medium|niche
+- criterion: best matching criterion id from the list above (e.g. "gc.playbook_enforcement"), or null
+
+OUTPUT: valid JSON array only — [{idx,personaFit,bestPersona,intentType,volumeTier,criterion}]`;
+
+      const userMsg = batch.map((q, i) => `${i}: persona=${q.persona} | "${q.query}"`).join("\n");
+
+      try {
+        const raw = await callClaudeFast(systemPrompt, userMsg, 30000);
+        // callClaudeFast returns text, parse as JSON
+        let results = [];
+        try {
+          const txt = typeof raw === "string" ? raw : JSON.stringify(raw);
+          const match = txt.match(/\[[\s\S]*\]/);
+          if (match) results = JSON.parse(match[0]);
+        } catch {}
+
+        results.forEach(r => {
+          const q = batch[r.idx];
+          if (!q) return;
+          enriched.push({
+            ...q,
+            personaFit: r.personaFit || null,
+            bestPersona: r.bestPersona || q.persona,
+            intentType: r.intentType || null,
+            volumeTier: r.volumeTier || null,
+            criterion: r.criterion || null,
+            enrichedAt: new Date().toISOString(),
+          });
+        });
+        // Fill any that Claude skipped
+        batch.forEach((q, i) => {
+          if (!results.find(r => r.idx === i)) enriched.push(q);
+        });
+      } catch {
+        batch.forEach(q => enriched.push(q));
+      }
+
+      setEnrichmentProgress({ done: Math.min((bi + 1) * BATCH, allQs.length), total: allQs.length });
+    }
+
+    // Save enriched back to IndexedDB + Firebase
+    const toSave = enriched.filter(q => q.enrichedAt);
+    await saveQuestions(toSave);
+    const now = new Date().toISOString();
+    (async () => {
+      for (const q of toSave) {
+        try { await db.saveWithId("m1_questions_v2", q.dedupHash || q.id, { ...q, updated_at: now }); } catch {}
+        await new Promise(r => setTimeout(r, 30));
+      }
+    })();
+
+    // Reload KB questions so enrichment fields appear in state
+    try {
+      const refreshed = await getQuestionsForCompany(company);
+      setKbQuestions(refreshed);
+    } catch {}
+
+    setEnrichmentLoading(false);
+    setEnrichmentProgress({ done: 0, total: 0 });
+  };
+
   const generateAIQuestions = async () => {
     setAiLoading(true);
     setAiStep(0);
+    setAiCurrentPersona(null);
     // Preserve persona-research questions, clear only AI-generated ones
     setAiQuestions(prev => prev.filter(q => q.source === "persona-research"));
 
     try {
       const existing = await getQuestionsForCompany(company);
-
-      setAiStep(1);
+      const now = new Date().toISOString();
+      const coKey = company.toLowerCase().replace(/\s+/g, "-");
       const activeP = PERSONAS.filter(p => activePersonas.has(p.id));
       const activeC = [...activeClusters];
 
-      // Build system prompt
-      let systemPrompt = QUESTION_GEN_SYSTEM + "\n\nPERSONAS:\n" +
-        activeP.map(p => `- ${p.id}: ${p.label}`).join("\n") +
-        "\n\nTOPIC CLUSTERS:\n" + activeC.join(", ");
-
-      // If generating for a specific researched persona, inject their profile
+      // ── SPECIFIC PERSON MODE: single call with psyche profile (unchanged behavior) ──
       const targetProfile = targetPersonaId !== "all" ? personaProfiles.find(p => p.id === targetPersonaId) : null;
       if (targetProfile && targetProfile.psycheProfile) {
+        setAiCurrentPersona({ id: targetProfile.personaType, short: targetProfile.name.split(" ")[0], idx: 0, total: 1 });
+        let systemPrompt = QUESTION_GEN_SYSTEM + "\n\nPERSONAS:\n" +
+          activeP.map(p => `- ${p.id}: ${p.label}`).join("\n") +
+          "\n\nTOPIC CLUSTERS:\n" + activeC.join(", ");
         systemPrompt += `\n\nTARGET DECISION MAKER (generate questions specifically for this person's psyche):
 Name: ${targetProfile.name}
 Title: ${targetProfile.title}
@@ -704,100 +1081,119 @@ Priorities: ${(targetProfile.priorities || []).join(", ")}
 Research Summary: ${targetProfile.researchSummary || ""}
 
 CRITICAL: Make questions HYPER-PERSONALIZED to this person. Reference their specific situation, pain points, and priorities. Questions should feel like they were written specifically for ${targetProfile.name}.`;
+        if (existing.length > 0) {
+          systemPrompt += "\n\nEXISTING QUESTIONS (DO NOT DUPLICATE):\n" +
+            existing.slice(0, 30).map((q, i) => `${i + 1}. [${q.persona}/${q.stage}] ${q.query}`).join("\n");
+        }
+        let userMsg = `TARGET COMPANY: ${company}\n`;
+        if (companyUrl) userMsg += `COMPANY URL: ${companyUrl}\n`;
+        userMsg += `INDUSTRY: ${industry}\n\nResearch ${company} thoroughly. Generate 15-20 hyper-personalized buyer-intent questions for ${targetProfile.name}.`;
+        const stepTimer = setInterval(() => setAiStep(prev => prev < 4 ? prev + 1 : prev), 10000);
+        const result = await callClaude(systemPrompt, userMsg, 120000);
+        clearInterval(stepTimer);
+        setAiStep(5);
+        const newQs = (result.questions || []).map((q, i) => ({
+          id: `ai-${coKey}-${targetProfile.personaType}-${Date.now()}-${i}`,
+          query: q.q, persona: q.p || targetProfile.personaType, stage: q.s, cluster: q.c,
+          lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
+          source: "ai", classification: verifyClassification(q, company),
+          company, companyUrl, generatedAt: now,
+          searchContext: q.context || "", confidence: q.confidence || 0.85,
+          dedupHash: questionHash(q.q), targetPersona: targetProfile.name,
+        }));
+        await saveQuestions(newQs);
+        if (result.companyIntel) { await saveCompanyIntel({ companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel }); setCompanyIntel(result.companyIntel); }
+        (async () => { for (const q of newQs) { try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {} await new Promise(r => setTimeout(r, 50)); } })();
+        setAiStep(6);
+        setAiQuestions(newQs);
+        setSelectedQs(prev => { const next = new Set(prev); newQs.forEach(q => next.add(q.id)); return next; });
+        const stats = await getKnowledgeBaseStats(); setKbStats(stats);
+        setCreditsUsed(prev => prev + 0.08);
+        return;
       }
 
-      if (existing.length > 0) {
-        systemPrompt += "\n\nEXISTING QUESTIONS (DO NOT DUPLICATE):\n" +
-          existing.slice(0, 30).map((q, i) => `${i + 1}. [${q.persona}/${q.stage}] ${q.query}`).join("\n");
-      } else {
-        systemPrompt += "\n\nNo existing questions yet \u2014 first generation for this company.";
+      // ── PER-PERSONA MODE: 1 API call per persona, each from their own cognitive lens ──
+      setAiStep(1);
+      let allNewQs = [];
+      let companyIntelSaved = false;
+
+      for (let pi = 0; pi < activeP.length; pi++) {
+        const persona = activeP[pi];
+        const ctx = PERSONA_CONTEXTS[persona.id];
+        if (!ctx) continue;
+
+        setAiCurrentPersona({ id: persona.id, short: persona.short, idx: pi, total: activeP.length });
+
+        // Inject researched profile if one exists for this persona type
+        const matchedProfile = personaProfiles.find(p => p.personaType === persona.id && p.psycheProfile);
+
+        const systemPrompt = buildPersonaQuestionPrompt(ctx, persona, activeC, company, existing, allNewQs, matchedProfile);
+        const userMsg = `TARGET COMPANY: ${company}
+COMPANY URL: ${companyUrl || ""}
+INDUSTRY: ${industry}
+PERSONA: ${persona.label}
+
+Research ${company} and generate exactly 12 buyer-intent questions from the authentic mindset of a ${ctx.title}.
+${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyIntel field (already captured)."}`;
+
+        const result = await callClaude(systemPrompt, userMsg, 90000);
+
+        const personaQs = (result.questions || []).map((q, i) => ({
+          id: `ai-${coKey}-${persona.id}-${Date.now()}-${i}`,
+          query: q.q,
+          persona: persona.id,
+          stage: q.s,
+          cluster: q.c,
+          lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
+          source: "ai",
+          classification: verifyClassification(q, company),
+          company, companyUrl, generatedAt: now,
+          searchContext: q.context || "",
+          confidence: q.confidence || 0.85,
+          dedupHash: questionHash(q.q),
+          targetPersona: matchedProfile ? matchedProfile.name : null,
+        }));
+
+        allNewQs = [...allNewQs, ...personaQs];
+
+        // Capture company intel from whichever persona call returns it first
+        if (!companyIntelSaved && result.companyIntel) {
+          const intel = { companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel };
+          await saveCompanyIntel(intel);
+          setCompanyIntel(intel);
+          companyIntelSaved = true;
+        }
       }
 
-      let userMsg = `TARGET COMPANY: ${company}\n`;
-      if (companyUrl) userMsg += `COMPANY URL: ${companyUrl}\n`;
-      userMsg += `INDUSTRY: ${industry}\n\n`;
-      userMsg += `ACTIVE PERSONAS: ${activeP.map(p => `${p.id} (${p.label})`).join(", ")}\n`;
-      userMsg += `ACTIVE CLUSTERS: ${activeC.join(", ")}\n\n`;
-      userMsg += `Research ${company} thoroughly using web search. Focus on their CURRENT market position, recent developments, and competitive dynamics. Generate 15-25 new buyer-intent questions.`;
-
-      const stepTimer = setInterval(() => setAiStep(prev => prev < 4 ? prev + 1 : prev), 10000);
-      const result = await callClaude(systemPrompt, userMsg, 120000);
-      clearInterval(stepTimer);
-
-      setAiStep(4);
-      const now = new Date().toISOString();
-      const coKey = company.toLowerCase().replace(/\s+/g, "-");
-
-      const newQs = (result.questions || []).map((q, i) => ({
-        id: `ai-${coKey}-${Date.now()}-${i}`,
-        query: q.q,
-        persona: q.p,
-        stage: q.s,
-        cluster: q.c,
-        lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
-        source: "ai",
-        classification: verifyClassification(q, company),
-        company: company,
-        companyUrl: companyUrl,
-        generatedAt: now,
-        searchContext: q.context || "",
-        confidence: q.confidence || 0.8,
-        dedupHash: questionHash(q.q),
-        targetPersona: targetProfile ? targetProfile.name : null,
-      }));
-
+      setAiCurrentPersona(null);
       setAiStep(5);
-      await saveQuestions(newQs);
+      await saveQuestions(allNewQs);
 
-      if (result.companyIntel) {
-        const intel = {
-          companyKey: coKey,
-          companyName: company,
-          url: companyUrl,
-          industry: industry,
-          lastResearchedAt: now,
-          ...result.companyIntel,
-        };
-        await saveCompanyIntel(intel);
-        setCompanyIntel(intel);
-      }
-
-      for (const q of newQs.filter(q => q.classification === "macro")) {
-        await saveMacro(q);
-      }
-
-      // Background: sync each question + macros + intel to Firebase
+      // Background Firebase sync
       (async () => {
-        for (const q of newQs) {
+        for (const q of allNewQs) {
           try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {}
           await new Promise(r => setTimeout(r, 50));
         }
-        for (const q of newQs.filter(q => q.classification === "macro")) {
+        for (const q of allNewQs.filter(q => q.classification === "macro")) {
           try { await db.saveWithId("m1_macros", q.dedupHash, { ...q, updated_at: now }); } catch {}
-        }
-        if (result.companyIntel) {
-          try { await db.saveWithId("m1_company_intel", coKey, { companyKey: coKey, companyName: company, url: companyUrl, industry, lastResearchedAt: now, ...result.companyIntel, updated_at: now }); } catch {}
         }
       })();
 
       setAiStep(6);
-      setAiQuestions(newQs);
-
-      setSelectedQs(prev => {
-        const next = new Set(prev);
-        newQs.forEach(q => next.add(q.id));
-        return next;
-      });
+      setAiQuestions(allNewQs);
+      setSelectedQs(prev => { const next = new Set(prev); allNewQs.forEach(q => next.add(q.id)); return next; });
 
       const stats = await getKnowledgeBaseStats();
       setKbStats(stats);
-      setCreditsUsed(prev => prev + 0.08);
+      setCreditsUsed(prev => prev + 0.08 * activeP.length);
 
     } catch (err) {
       setAiError(err.message);
       setAiStep(0);
     } finally {
       setAiLoading(false);
+      setAiCurrentPersona(null);
     }
   };
 
@@ -1502,6 +1898,9 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
         <button onClick={() => setActiveTab("questions")} style={tabBtn("questions")}>
           Questions
         </button>
+        <button onClick={() => setActiveTab("matrix")} style={tabBtn("matrix")}>
+          Decision Matrix
+        </button>
         <button onClick={() => setActiveTab("research")} style={tabBtn("research")}>
           Persona Research
           {personaProfiles.length > 0 && (
@@ -1609,6 +2008,30 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </div>
           )}
 
+          {/* Enrichment progress bar */}
+          {enrichmentLoading && (
+            <div style={{
+              background: t.bgCard, border: `1px solid ${t.brand}30`, borderLeft: `3px solid #fbbf24`,
+              borderRadius: 10, padding: "14px 20px", marginBottom: 16, animation: "fadeUp 0.3s ease",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fbbf24", animation: "pulse 1.5s ease-in-out infinite" }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", fontFamily: "var(--mono)", letterSpacing: 0.5 }}>
+                  ENRICHING & MAPPING QUESTIONS
+                </span>
+                <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
+                  {enrichmentProgress.done} / {enrichmentProgress.total}
+                </span>
+              </div>
+              <div style={{ height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 2, background: "#fbbf24", transition: "width 0.4s ease",
+                  width: enrichmentProgress.total > 0 ? `${(enrichmentProgress.done / enrichmentProgress.total) * 100}%` : "0%",
+                }} />
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons: Show Database (daily) + Generate New (weekly) */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
             <button onClick={() => { setGenerated(true); (async () => { try { const cached = await getQuestionsForCompany(company); if (cached.length > 0) { setKbQuestions(cached); setSelectedQs(new Set([...Q_BANK.map((_, i) => `q-${i + 1}`), ...cached.map(q => q.id)])); } else { setSelectedQs(new Set(Q_BANK.map((_, i) => `q-${i + 1}`))); } const intel = await getCompanyIntel(company); if (intel) setCompanyIntel(intel); } catch {} })(); }}
@@ -1632,6 +2055,20 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
               }}>
               {aiLoading ? "Generating\u2026" : "Generate New via AI"}
             </button>
+            {generated && questions.length > 0 && (
+              <button
+                onClick={enrichQuestions}
+                disabled={enrichmentLoading}
+                title="Map all questions to personas, intent types, and decision criteria using AI"
+                style={{
+                  padding: "12px 20px", borderRadius: 8, cursor: enrichmentLoading ? "not-allowed" : "pointer",
+                  background: "transparent", border: `1px solid #fbbf2440`, color: "#fbbf24",
+                  fontSize: 13, fontWeight: 700, fontFamily: "var(--mono)", textTransform: "uppercase",
+                  letterSpacing: 1, opacity: enrichmentLoading ? 0.4 : 1, transition: "all 0.2s",
+                }}>
+                {enrichmentLoading ? "Mapping\u2026" : "\u2728 Enrich & Map"}
+              </button>
+            )}
             {generated && (
               <span style={{ fontSize: 12, color: t.green, fontFamily: "var(--mono)" }}>
                 {questions.length} questions in database
@@ -1654,27 +2091,30 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   AI RESEARCH IN PROGRESS
                 </span>
                 <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                  ~$0.08 estimated
+                  ~${(0.08 * (activePersonas.size || 1)).toFixed(2)} estimated
                 </span>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {AI_STEPS.slice(0, -1).map((step, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{
-                      width: 6, height: 6, borderRadius: "50%",
-                      background: i < aiStep ? t.green : i === aiStep ? t.brand : t.border,
-                      transition: "background 0.3s",
-                    }} />
-                    <span style={{
-                      fontSize: 11, fontFamily: "var(--mono)",
-                      color: i < aiStep ? t.green : i === aiStep ? t.text : t.textGhost,
-                      fontWeight: i === aiStep ? 600 : 400,
-                    }}>
-                      {step}
-                    </span>
+              {aiCurrentPersona ? (
+                <>
+                  <div style={{ fontSize: 12, color: t.brand, fontWeight: 600, fontFamily: "var(--mono)" }}>
+                    Generating {aiCurrentPersona.short} questions...
                   </div>
-                ))}
-              </div>
+                  <div style={{ fontSize: 11, color: t.textSec, marginTop: 4, fontFamily: "var(--mono)" }}>
+                    {aiCurrentPersona.idx + 1} of {aiCurrentPersona.total} personas
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%",
+                        width: `${((aiCurrentPersona.idx + 1) / aiCurrentPersona.total) * 100}%`,
+                        background: t.brand, transition: "width 0.5s ease", borderRadius: 2,
+                      }} />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: t.brand, fontFamily: "var(--mono)" }}>{AI_STEPS[aiStep]}</div>
+              )}
             </div>
           )}
 
@@ -1818,6 +2258,26 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   </select>
                 )}
 
+                {questions.some(q => q.intentType) && (
+                  <select value={filterIntentType} onChange={e => setFilterIntentType(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Intent Types</option>
+                    {Object.entries(INTENT_CONFIG).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.intentType === k).length})</option>
+                    ))}
+                  </select>
+                )}
+
+                {questions.some(q => q.volumeTier) && (
+                  <select value={filterVolumeTier} onChange={e => setFilterVolumeTier(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Volume Tiers</option>
+                    {Object.entries(VOLUME_CONFIG).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.volumeTier === k).length})</option>
+                    ))}
+                  </select>
+                )}
+
                 <div style={{ flex: 1 }} />
 
                 <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
@@ -1860,6 +2320,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                       <th style={thStyle(t)}>Source</th>
                       <th style={thStyle(t)}>Jurisdiction</th>
                       <th style={thStyle(t)}>Topic Cluster</th>
+                      <th style={thStyle(t)}>Intent</th>
+                      <th style={thStyle(t)}>Fit</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1950,6 +2412,42 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                               {q.cluster}
                             </span>
                           </td>
+                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                            {q.intentType ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "center" }}>
+                                <span style={badge(INTENT_CONFIG[q.intentType]?.bg, INTENT_CONFIG[q.intentType]?.color)}>
+                                  {INTENT_CONFIG[q.intentType]?.label}
+                                </span>
+                                {q.volumeTier && (
+                                  <span style={{ fontSize: 10, color: VOLUME_CONFIG[q.volumeTier]?.color, fontFamily: "var(--mono)" }}>
+                                    {VOLUME_CONFIG[q.volumeTier]?.label}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                            {q.personaFit != null ? (
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                                <span style={{
+                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)",
+                                  color: q.personaFit >= 8 ? "#4ade80" : q.personaFit >= 5 ? "#fbbf24" : "#f87171",
+                                }}>
+                                  {q.personaFit}
+                                </span>
+                                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>/10</span>
+                                {q.bestPersona && q.bestPersona !== q.persona && (
+                                  <span style={{ fontSize: 10, color: "#f87171", fontFamily: "var(--mono)" }} title={`Better fit: ${q.bestPersona}`}>
+                                    →{q.bestPersona.toUpperCase()}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -1976,6 +2474,205 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </>
           )}
         </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* TAB: DECISION MATRIX                              */}
+      {/* ═══════════════════════════════════════════════════ */}
+      {activeTab === "matrix" && (
+        <div>
+          <div style={{ marginBottom: 24 }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: t.text }}>
+              Decision Matrix
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
+              Per-persona evaluation criteria. Score Sirion 1–10 on each criterion.
+              Run <strong style={{ color: "#fbbf24" }}>Enrich & Map</strong> from the Questions tab first to populate question coverage.
+            </p>
+          </div>
+
+          {/* Persona selector */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
+            {PERSONAS.map(p => (
+              <button key={p.id} onClick={() => setActiveMatrixPersona(p.id)} style={{
+                padding: "8px 16px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 700,
+                fontFamily: "var(--mono)", border: `1px solid ${activeMatrixPersona === p.id ? t.brand + "60" : t.border}`,
+                background: activeMatrixPersona === p.id ? t.brand + "15" : "transparent",
+                color: activeMatrixPersona === p.id ? t.brand : t.textDim, transition: "all 0.15s",
+              }}>
+                {p.icon} {p.short}
+              </button>
+            ))}
+          </div>
+
+          {/* Matrix table */}
+          {(() => {
+            const criteria = DECISION_CRITERIA[activeMatrixPersona] || [];
+            const personaLabel = PERSONAS.find(p => p.id === activeMatrixPersona)?.label || "";
+            const qForPersona = questions.filter(q => q.persona === activeMatrixPersona);
+            const enrichedCount = qForPersona.filter(q => q.personaFit != null).length;
+
+            return (
+              <div>
+                {/* Summary bar */}
+                <div style={{
+                  display: "flex", gap: 20, padding: "12px 18px", marginBottom: 16,
+                  background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
+                  flexWrap: "wrap", alignItems: "center",
+                }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: t.brand, fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {qForPersona.length}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Questions
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#fbbf24", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {enrichedCount}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Enriched
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#4ade80", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {criteria.length}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Criteria
+                    </div>
+                  </div>
+                  {/* Overall score */}
+                  {(() => {
+                    const scored = criteria.filter(c => decisionScores[`${activeMatrixPersona}.${c.id}`] != null);
+                    if (scored.length === 0) return null;
+                    const weightedSum = scored.reduce((s, c) => s + (decisionScores[`${activeMatrixPersona}.${c.id}`] * c.weight), 0);
+                    const maxSum = scored.reduce((s, c) => s + (10 * c.weight), 0);
+                    const pct = Math.round((weightedSum / maxSum) * 100);
+                    return (
+                      <div style={{ marginLeft: "auto" }}>
+                        <div style={{
+                          fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
+                          color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171",
+                        }}>
+                          {pct}%
+                        </div>
+                        <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                          Weighted Score
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thStyle(t), textAlign: "left", width: "32%" }}>Criterion — {personaLabel}</th>
+                        <th style={thStyle(t)}>Priority</th>
+                        <th style={thStyle(t)}>Questions</th>
+                        <th style={thStyle(t)}>Sirion Score</th>
+                        <th style={thStyle(t)}>Gap</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {criteria.map(c => {
+                        const key = `${activeMatrixPersona}.${c.id}`;
+                        const score = decisionScores[key];
+                        const qCount = questions.filter(q => q.criterion === key).length;
+                        const gap = score != null ? Math.max(0, c.weight - score) : null;
+                        const gapColor = gap == null ? t.textGhost : gap <= 1 ? "#4ade80" : gap <= 3 ? "#fbbf24" : "#f87171";
+
+                        return (
+                          <tr key={c.id} style={{ borderBottom: `1px solid ${t.border}`, transition: "background 0.1s" }}
+                            onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            <td style={{ padding: "12px 16px", color: t.text, fontWeight: 500, lineHeight: 1.4 }}>
+                              {c.label}
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <div style={{ display: "flex", justifyContent: "center", gap: 2 }}>
+                                {Array.from({ length: 10 }).map((_, i) => (
+                                  <div key={i} style={{
+                                    width: 5, height: 5, borderRadius: "50%",
+                                    background: i < c.weight
+                                      ? (c.weight >= 8 ? "#f87171" : c.weight >= 6 ? "#fbbf24" : "#67e8f9")
+                                      : t.border,
+                                  }} />
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                                {c.weight}/10
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <span style={{
+                                fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171",
+                              }}>
+                                {qCount}
+                              </span>
+                              {qCount === 0 && (
+                                <div style={{ fontSize: 9, color: "#f87171", fontFamily: "var(--mono)" }}>no coverage</div>
+                              )}
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <input
+                                type="number" min="1" max="10"
+                                value={score ?? ""}
+                                placeholder="—"
+                                onChange={e => {
+                                  const v = parseInt(e.target.value);
+                                  setDecisionScores(prev => ({
+                                    ...prev,
+                                    [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)),
+                                  }));
+                                }}
+                                style={{
+                                  width: 48, padding: "4px 6px", borderRadius: 6, textAlign: "center",
+                                  border: `1px solid ${score != null ? t.brand + "50" : t.border}`,
+                                  background: score != null ? t.brand + "08" : t.inputBg,
+                                  color: score != null ? t.brand : t.textDim,
+                                  fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                  outline: "none",
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              {gap != null ? (
+                                <span style={{
+                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)", color: gapColor,
+                                }}>
+                                  {gap === 0 ? "✓" : `-${gap}`}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Gap legend */}
+                <div style={{ display: "flex", gap: 16, marginTop: 12, padding: "10px 16px", background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8 }}>
+                  <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Gap =</span>
+                  <span style={{ fontSize: 11, color: "#4ade80", fontFamily: "var(--mono)" }}>✓ Covered</span>
+                  <span style={{ fontSize: 11, color: "#fbbf24", fontFamily: "var(--mono)" }}>-1 to -3 Partial</span>
+                  <span style={{ fontSize: 11, color: "#f87171", fontFamily: "var(--mono)" }}>&gt;-3 Critical gap</span>
+                  <span style={{ fontSize: 11, color: t.textDim, marginLeft: "auto", fontFamily: "var(--mono)" }}>
+                    Scores saved in session. Run Enrich & Map to populate question coverage.
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════ */}
