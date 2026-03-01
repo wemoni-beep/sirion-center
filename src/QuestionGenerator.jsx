@@ -972,9 +972,10 @@ export default function QuestionGenerator({ onNavigate }) {
 
   // ── Enrich & Map Questions (retroactive classification) ──
   const enrichQuestions = async () => {
-    // Only enrich non-static questions — static Q_BANK has hardcoded IDs that
-    // shouldn't be persisted to IndexedDB (they'd overwrite KB records on every run)
-    const allQs = [...questions].filter(q => q.source !== "static");
+    // Enrich ALL questions including static seed questions.
+    // Static questions (id: q-1..q-N) are saved with company field so
+    // getQuestionsForCompany can retrieve them and merge enrichment into Tier 2.
+    const allQs = [...questions];
     if (allQs.length === 0) return;
     setEnrichmentLoading(true);
     setEnrichmentProgress({ done: 0, total: allQs.length });
@@ -1079,7 +1080,13 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
     try {
       const refreshed = await getQuestionsForCompany(company);
       setKbQuestions(refreshed);
-    } catch {}
+      // Show confirmation so user knows how many questions were actually enriched
+      const enrichedCount = toSave.length;
+      setAutoGenMsg(`Enriched ${enrichedCount} of ${allQs.length} questions — Intent, Fit & Criterion mapped`);
+      setTimeout(() => setAutoGenMsg(""), 6000);
+    } catch (e) {
+      setAiError(`Enrichment saved but reload failed: ${e.message}`);
+    }
 
     setEnrichmentLoading(false);
     setEnrichmentProgress({ done: 0, total: 0 });
