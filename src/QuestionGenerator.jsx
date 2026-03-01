@@ -694,6 +694,11 @@ export default function QuestionGenerator({ onNavigate }) {
   // ── Enrichment state ──
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [enrichmentProgress, setEnrichmentProgress] = useState({ done: 0, total: 0 });
+  const [enrichmentStep, setEnrichmentStep] = useState(""); // current phase label
+  const [enrichmentLog, setEnrichmentLog] = useState([]); // running log lines
+  const [enrichmentStartTime, setEnrichmentStartTime] = useState(null);
+  const [enrichmentElapsed, setEnrichmentElapsed] = useState(0);
+  const [enrichmentResult, setEnrichmentResult] = useState(null); // { count, total } on complete
   const [filterIntentType, setFilterIntentType] = useState("all");
   const [filterVolumeTier, setFilterVolumeTier] = useState("all");
 
@@ -721,6 +726,15 @@ export default function QuestionGenerator({ onNavigate }) {
   const [targetPersonaId, setTargetPersonaId] = useState("all"); // for persona-specific question gen
   const fileInputRef = useRef(null);
   const pipelineMigratedRef = useRef(false);
+
+  // ── Enrichment elapsed timer ──
+  React.useEffect(() => {
+    if (!enrichmentLoading) return;
+    const interval = setInterval(() => {
+      setEnrichmentElapsed(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [enrichmentLoading]);
 
   // ── One-time migration: save pipeline questions to KB so they persist ──
   useEffect(() => {
@@ -972,16 +986,20 @@ export default function QuestionGenerator({ onNavigate }) {
 
   // ── Enrich & Map Questions (retroactive classification) ──
   const enrichQuestions = async () => {
-    // Enrich ALL questions including static seed questions.
-    // Static questions (id: q-1..q-N) are saved with company field so
-    // getQuestionsForCompany can retrieve them and merge enrichment into Tier 2.
     const allQs = [...questions];
     if (allQs.length === 0) return;
+
+    // Reset all animation state
     setEnrichmentLoading(true);
     setEnrichmentProgress({ done: 0, total: allQs.length });
+    setEnrichmentStep("Preparing enrichment...");
+    setEnrichmentLog([]);
+    setEnrichmentStartTime(Date.now());
+    setEnrichmentElapsed(0);
+    setEnrichmentResult(null);
     setAiError("");
 
-    const BATCH = 15; // smaller batches = more reliable JSON output
+    const BATCH = 15;
     const batches = [];
     for (let i = 0; i < allQs.length; i += BATCH) batches.push(allQs.slice(i, i + BATCH));
 
@@ -1002,17 +1020,20 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
     const now = new Date().toISOString();
     let batchErrors = 0;
 
+    setEnrichmentStep("Mapping intent & fit scores...");
+    setEnrichmentLog([`Starting ${batches.length} batches · ${allQs.length} questions total`]);
+
     for (let bi = 0; bi < batches.length; bi++) {
       const batch = batches[bi];
       const userMsg = batch.map((q, i) => `${i}: [${q.persona||"?"}] ${q.query}`).join("\n");
 
       try {
         const raw = await callClaudeFast(systemPrompt, userMsg, 3000);
-        // callClaudeFast returns already-parsed JS
         let results = Array.isArray(raw) ? raw : (Array.isArray(raw?.results) ? raw.results : []);
 
         if (results.length === 0) {
           batchErrors++;
+          setEnrichmentLog(prev => [...prev, `Batch ${bi + 1}/${batches.length} — empty response, retrying next`]);
         } else {
           results.forEach(r => {
             if (typeof r.idx !== "number") return;
@@ -1027,23 +1048,22 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
               enrichedAt: now,
             });
           });
+          setEnrichmentLog(prev => [...prev, `Batch ${bi + 1}/${batches.length} — ${results.length} questions classified`]);
         }
       } catch (e) {
         batchErrors++;
-        console.warn(`Enrichment batch ${bi + 1} failed:`, e.message);
+        setEnrichmentLog(prev => [...prev, `Batch ${bi + 1}/${batches.length} — error: ${e.message.slice(0, 60)}`]);
       }
 
       setEnrichmentProgress({ done: Math.min((bi + 1) * BATCH, allQs.length), total: allQs.length });
     }
 
-    // Show error if most batches failed
     if (batchErrors === batches.length) {
-      setAiError(`Enrichment failed: all ${batches.length} API calls returned no results. Check API key and console.`);
+      setAiError(`Enrichment failed: all ${batches.length} API calls returned no results. Check API key.`);
       setEnrichmentLoading(false);
       setEnrichmentProgress({ done: 0, total: 0 });
       return;
     }
-
     if (enrichmentMap.size === 0) {
       setAiError("Enrichment returned no classifications. Try again.");
       setEnrichmentLoading(false);
@@ -1051,45 +1071,48 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
       return;
     }
 
-    // Save enriched questions to IndexedDB (with company + dedupHash always set)
+    // Phase 2: save enriched questions
+    setEnrichmentStep("Filling FIT scores & criteria...");
+    setEnrichmentLog(prev => [...prev, `${enrichmentMap.size} questions classified — writing to local database...`]);
+
     const toSave = allQs
       .map(q => {
         const hash = questionHash(q.query);
         const enrichment = enrichmentMap.get(hash);
         if (!enrichment) return null;
-        return {
-          ...q,
-          company: q.company || company,   // ensures getQuestionsForCompany finds it
-          dedupHash: q.dedupHash || hash,  // ensures Firebase sync works
-          ...enrichment,
-        };
+        return { ...q, company: q.company || company, dedupHash: q.dedupHash || hash, ...enrichment };
       })
       .filter(Boolean);
 
     await saveQuestions(toSave);
+    setEnrichmentLog(prev => [...prev, `Saved ${toSave.length} enriched questions to local DB`]);
 
-    // Firebase background sync
+    // Phase 3: Firebase background sync
+    setEnrichmentStep("Building decision matrix...");
+    setEnrichmentLog(prev => [...prev, `Syncing ${toSave.length} questions to cloud...`]);
+
     (async () => {
       for (const q of toSave) {
         try { await db.saveWithId("m1_questions_v2", q.dedupHash, { ...q, updated_at: now }); } catch {}
         await new Promise(r => setTimeout(r, 30));
       }
+      setEnrichmentLog(prev => [...prev, `Cloud sync complete`]);
     })();
 
-    // Reload KB — triggers useMemo to merge enrichment fields into all questions
+    // Phase 4: reload KB and complete
     try {
+      setEnrichmentLog(prev => [...prev, `Rebuilding question index...`]);
       const refreshed = await getQuestionsForCompany(company);
       setKbQuestions(refreshed);
-      // Show confirmation so user knows how many questions were actually enriched
-      const enrichedCount = toSave.length;
-      setAutoGenMsg(`Enriched ${enrichedCount} of ${allQs.length} questions — Intent, Fit & Criterion mapped`);
-      setTimeout(() => setAutoGenMsg(""), 6000);
+      setEnrichmentStep("Complete");
+      setEnrichmentResult({ count: toSave.length, total: allQs.length });
+      setEnrichmentLog(prev => [...prev, `Done — ${toSave.length} of ${allQs.length} questions enriched`]);
     } catch (e) {
       setAiError(`Enrichment saved but reload failed: ${e.message}`);
     }
 
     setEnrichmentLoading(false);
-    setEnrichmentProgress({ done: 0, total: 0 });
+    setEnrichmentProgress({ done: toSave.length, total: allQs.length });
   };
 
   const generateAIQuestions = async () => {
@@ -2052,29 +2075,111 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             </div>
           )}
 
-          {/* Enrichment progress bar */}
-          {enrichmentLoading && (
-            <div style={{
-              background: t.bgCard, border: `1px solid ${t.brand}30`, borderLeft: `3px solid #fbbf24`,
-              borderRadius: 10, padding: "14px 20px", marginBottom: 16, animation: "fadeUp 0.3s ease",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fbbf24", animation: "pulse 1.5s ease-in-out infinite" }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", fontFamily: "var(--mono)", letterSpacing: 0.5 }}>
-                  ENRICHING & MAPPING QUESTIONS
-                </span>
-                <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                  {enrichmentProgress.done} / {enrichmentProgress.total} questions mapped
-                </span>
+          {/* ── Enrichment animated panel ── */}
+          {(enrichmentLoading || enrichmentResult) && (() => {
+            const PHASES = ["Mapping intent & fit scores...", "Filling FIT scores & criteria...", "Building decision matrix...", "Complete"];
+            const currentPhaseIdx = PHASES.indexOf(enrichmentStep);
+            const pct = enrichmentProgress.total > 0 ? enrichmentProgress.done / enrichmentProgress.total : (enrichmentStep === "Complete" ? 1 : 0);
+            const R = 38;
+            const CIRC = 2 * Math.PI * R;
+            const isComplete = enrichmentStep === "Complete";
+            const mm = Math.floor(enrichmentElapsed / 60).toString().padStart(2, "0");
+            const ss = (enrichmentElapsed % 60).toString().padStart(2, "0");
+            return (
+              <div style={{
+                background: t.bgCard, border: `1px solid ${isComplete ? "#4ade8040" : "#fbbf2440"}`,
+                borderRadius: 12, padding: "20px 24px", marginBottom: 16, animation: "fadeUp 0.3s ease",
+                transition: "border-color 0.5s ease",
+              }}>
+                <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+
+                  {/* Circular progress ring */}
+                  <div style={{ flexShrink: 0, position: "relative", width: 88, height: 88 }}>
+                    <svg width="88" height="88" viewBox="0 0 88 88" style={{ transform: "rotate(-90deg)" }}>
+                      <circle cx="44" cy="44" r={R} fill="none" stroke={t.border} strokeWidth="6" />
+                      <circle
+                        cx="44" cy="44" r={R} fill="none"
+                        stroke={isComplete ? "#4ade80" : "#fbbf24"}
+                        strokeWidth="6" strokeLinecap="round"
+                        strokeDasharray={CIRC}
+                        strokeDashoffset={CIRC * (1 - pct)}
+                        style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.4s ease" }}
+                      />
+                    </svg>
+                    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                      {isComplete ? (
+                        <div style={{ fontSize: 24, color: "#4ade80" }}>✓</div>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 17, fontWeight: 700, color: "#fbbf24", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                            {Math.round(pct * 100)}%
+                          </div>
+                          <div style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", marginTop: 3 }}>
+                            {enrichmentProgress.done}/{enrichmentProgress.total}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right: label + phases + log */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+
+                    {/* Title row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      {!isComplete && (
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#fbbf24", animation: "pulse 1.5s ease-in-out infinite", flexShrink: 0 }} />
+                      )}
+                      <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.5, fontFamily: "var(--mono)", color: isComplete ? "#4ade80" : "#fbbf24" }}>
+                        {enrichmentStep || "Enriching questions..."}
+                      </span>
+                      <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)", marginLeft: "auto" }}>
+                        {mm}:{ss}
+                      </span>
+                    </div>
+
+                    {/* Phase progress strips */}
+                    <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
+                      {PHASES.map((phase, i) => {
+                        const done = isComplete || currentPhaseIdx > i;
+                        const active = currentPhaseIdx === i && !isComplete;
+                        return (
+                          <div key={phase} title={phase} style={{
+                            flex: 1, height: 4, borderRadius: 2,
+                            background: done ? (isComplete && i === PHASES.length - 1 ? "#4ade80" : "#fbbf24") : active ? "#fbbf2466" : t.border,
+                            transition: "background 0.4s ease",
+                          }} />
+                        );
+                      })}
+                    </div>
+
+                    {/* Running log */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 90, overflowY: "auto" }}>
+                      {enrichmentLog.slice(-6).map((line, i) => (
+                        <div key={i} style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)", lineHeight: 1.5 }}>
+                          <span style={{ color: "#fbbf2460", marginRight: 6 }}>›</span>{line}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Completion result */}
+                    {enrichmentResult && (
+                      <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 12 }}>
+                        <span style={{ fontSize: 12, color: "#4ade80", fontFamily: "var(--mono)", fontWeight: 600 }}>
+                          ✓ {enrichmentResult.count} of {enrichmentResult.total} questions enriched — Intent · Fit · Criterion mapped
+                        </span>
+                        <button onClick={() => setEnrichmentResult(null)} style={{
+                          marginLeft: "auto", fontSize: 11, color: t.textDim, background: "none",
+                          cursor: "pointer", fontFamily: "var(--mono)", padding: "2px 8px",
+                          borderRadius: 4, border: `1px solid ${t.border}`,
+                        }}>Dismiss</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div style={{ height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
-                <div style={{
-                  height: "100%", borderRadius: 2, background: "#fbbf24", transition: "width 0.4s ease",
-                  width: enrichmentProgress.total > 0 ? `${(enrichmentProgress.done / enrichmentProgress.total) * 100}%` : "0%",
-                }} />
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Action Buttons: Show Database (daily) + Generate New (weekly) */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
