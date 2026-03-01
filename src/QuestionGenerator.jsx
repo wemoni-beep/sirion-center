@@ -853,10 +853,11 @@ export default function QuestionGenerator({ onNavigate }) {
     };
 
     // Tier 1: Pipeline questions — source of truth for identity/ordering
+    // Normalize persona: pipeline may have stored label ("General Counsel") instead of id ("gc")
     pipelineQuestions.forEach(q => addQ({
       id: q.id,
       query: q.query,
-      persona: q.persona,
+      persona: PERSONAS.find(p => p.id === q.persona || p.label === q.persona)?.id || q.persona,
       stage: q.stage,
       cluster: q.cw || q.cluster,
       lifecycle: q.lifecycle || "full-stack",
@@ -1793,7 +1794,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
     // so the pipeline always reflects the full question count
     const exportQs = questions.map(q => ({
       id: q.id,
-      persona: PERSONAS.find(p => p.id === q.persona)?.label || q.persona,
+      persona: q.persona,  // keep as id (gc/cpo/etc), not label — label lookup on read
       stage: q.stage,
       query: q.query,
       cw: q.cluster,

@@ -66,37 +66,6 @@ export function PipelineProvider({ children }) {
               merged[key] = latest[key];
             }
           }
-          // If m2 has no scan results in the pipeline doc, hydrate from m2_scan_results collection
-          if (!merged.m2?.scanResults?.results?.length) {
-            try {
-              const [scanMeta, scanResults] = await Promise.all([
-                db.getAllPaginated("m2_scan_meta"),
-                db.getAllPaginated("m2_scan_results"),
-              ]);
-              if (scanResults.length > 0) {
-                const latestMeta = scanMeta
-                  .filter(m => m.status === "complete")
-                  .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0]
-                  || scanMeta[0];
-                const llms = latestMeta?.llms || ["claude", "gemini", "openai"];
-                const compactResults = scanResults.map(r => ({
-                  qid: r.qid, question: r.question, query: r.query,
-                  lifecycle: r.lifecycle, persona: r.persona, stage: r.stage,
-                  mentions: r.mentions || Object.fromEntries(
-                    llms.map(lid => [lid, r.analyses?.[lid]?.mentioned || false])
-                  ),
-                }));
-                if (!merged.m2) merged.m2 = { ...INITIAL_STATE.m2 };
-                merged.m2 = {
-                  ...merged.m2,
-                  scanResults: { llms, results: compactResults },
-                  scores: latestMeta?.scores || merged.m2.scores,
-                  scannedAt: latestMeta?.date || merged.m2.scannedAt,
-                };
-                console.info(`[Pipeline] Hydrated m2.scanResults from m2_scan_results (${compactResults.length} results)`);
-              }
-            } catch (e) { console.warn("[Pipeline] m2 hydration failed:", e.message); }
-          }
           dispatch({ type: "LOAD", payload: { ...merged, _docId: docId } });
         } else {
           // No Firebase docs — try localStorage snapshot
