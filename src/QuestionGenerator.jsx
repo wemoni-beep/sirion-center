@@ -629,6 +629,15 @@ export default function QuestionGenerator({ onNavigate }) {
     return c;
   }, [questions]);
 
+  // ── Auto-export to M2 whenever questions are generated ──
+  // Triggers 1.5s after generation completes so M2 always stays in sync
+  useEffect(() => {
+    if (!generated || questions.length === 0) return;
+    const timer = setTimeout(() => exportToM2(), 1500);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generated, questions.length]);
+
   // ══════════════════════════════════════════════════════
   // QUESTION GENERATION
   // ══════════════════════════════════════════════════════
@@ -1827,12 +1836,13 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
 
                 <button onClick={exportToM2}
                   style={{
-                    padding: "8px 16px", borderRadius: 8, border: "none",
-                    background: exportCopied ? t.green : `linear-gradient(135deg, ${t.brand}, ${t.brandDim})`,
-                    color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                    fontFamily: "var(--mono)", letterSpacing: 0.5,
+                    padding: "6px 12px", borderRadius: 6,
+                    border: `1px solid ${exportCopied ? t.green : t.border}`,
+                    background: "transparent",
+                    color: exportCopied ? t.green : t.textSec, fontSize: 11, cursor: "pointer",
+                    fontFamily: "var(--mono)",
                   }}>
-                  {exportCopied ? "\u2713 Sent to M2 Pipeline" : "Export to M2"}
+                  {exportCopied ? "\u2713 Synced to M2" : "\u21BB Sync to M2"}
                 </button>
               </div>
 

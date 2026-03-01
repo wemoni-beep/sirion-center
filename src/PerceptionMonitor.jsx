@@ -1,5 +1,5 @@
 import { FONT } from "./typography";
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, AreaChart, Area, Cell, Legend, LineChart, Line,
@@ -781,11 +781,21 @@ export default function App() {
       // 5. Auto-build export payload for M3 (no manual export needed)
       const payload = buildExportPayload(result);
 
-      // 6. Update local state + pipeline (with full exportPayload for M3)
+      // 6. Update local state + pipeline
+      // Store compact results in pipeline to avoid Firestore depth-2 truncation
+      // Full results stay in local scanData state for the results view
       setScanData(result);
       setScanHistory(prev => [result, ...prev].slice(0, 20));
+      const compactResults = result.results.map(r => ({
+        lifecycle: r.lifecycle || "full-stack",
+        persona: r.persona,
+        stage: r.stage,
+        mentions: Object.fromEntries(
+          (result.llms || []).map(lid => [lid, r.analyses?.[lid]?.mentioned || false])
+        ),
+      }));
       updateModule("m2", {
-        scanResults: result,
+        scanResults: { llms: result.llms, results: compactResults },
         scores: result.scores,
         scannedAt: result.date,
         contentGaps: payload.allContentGaps,
@@ -1136,19 +1146,41 @@ export default function App() {
               {scanning && scanProgress && (
                 <Card glow={T.teal} style={{ borderLeft: "3px solid " + T.teal }}>
                   <Label>SCANNING IN PROGRESS</Label>
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: T.teal, fontWeight: 600 }}>{scanProgress.status}</span>
+                  {/* Overall progress */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                      <span style={{ fontSize: 11, color: T.teal, fontWeight: 600 }}>
+                        {scanProgress.phase === "analyzing" ? "Analyzing responses..." : scanProgress.query ? `"${scanProgress.query.substring(0, 55)}..."` : scanProgress.status}
+                      </span>
                       <span style={{ fontSize: 11, fontFamily: T.fontM, color: T.teal }}>{scanProgress.percent}%</span>
                     </div>
-                    <PBar value={scanProgress.percent} color={T.teal} h={6} />
+                    <PBar value={scanProgress.percent} color={T.teal} h={5} />
                   </div>
-                  {scanProgress.query && (
-                    <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
-                      {scanProgress.llm && <Chip text={LLM_META[scanProgress.llm]?.name || scanProgress.llm} color={LLM_META[scanProgress.llm]?.color || T.dim} />}
-                      {" "}{scanProgress.query}...
-                    </div>
-                  )}
+                  {/* Per-LLM progress bars */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                    {allLLMs.map(lid => {
+                      const done = scanProgress.llmDone?.[lid] || 0;
+                      const total = queries.length;
+                      const pct = total ? Math.round((done / total) * 100) : 0;
+                      const isActive = scanProgress.currentLLM === lid && scanProgress.phase !== "analyzing";
+                      const meta = LLM_META[lid];
+                      return (
+                        <div key={lid}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <div style={{ width: 6, height: 6, borderRadius: "50%", background: meta?.color || T.dim, flexShrink: 0 }} />
+                              <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, color: isActive ? (meta?.color || T.teal) : T.muted, fontFamily: T.fontM }}>
+                                {meta?.name || lid}
+                                {isActive && <span style={{ marginLeft: 4, fontSize: 9, opacity: 0.7 }}>▶ asking...</span>}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: 10, fontFamily: T.fontM, color: T.dim }}>{done}/{total}</span>
+                          </div>
+                          <PBar value={pct} color={isActive ? (meta?.color || T.teal) : (meta?.color || T.dim) + "60"} h={4} />
+                        </div>
+                      );
+                    })}
+                  </div>
                   <div style={{ marginTop: 10 }}>
                     <Btn onClick={handleCancelScan} style={{ borderColor: T.red, color: T.red }}>Cancel Scan</Btn>
                   </div>
@@ -1336,62 +1368,100 @@ export default function App() {
                     </select>
                     <div style={{ marginLeft: "auto", fontSize: 11, color: T.dim, fontFamily: T.fontM }}>{filtered.length} results {"\u00B7"} {scanData.llms.length} LLMs</div>
                   </div>
+                  <div style={{ background: T.bgCard, border: "1px solid " + T.border, borderRadius: 10, overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ background: T.surface }}>
+                          <th style={{ padding: "7px 10px", textAlign: "left", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "38%" }}>Query</th>
+                          <th style={{ padding: "7px 6px", textAlign: "left", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "12%" }}>Persona</th>
+                          <th style={{ padding: "7px 6px", textAlign: "left", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "10%" }}>Stage</th>
+                          <th style={{ padding: "7px 6px", textAlign: "left", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "12%" }}>CLM</th>
+                          <th style={{ padding: "7px 6px", textAlign: "center", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "14%" }}>LLM Presence</th>
+                          <th style={{ padding: "7px 6px", textAlign: "center", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "14%" }}>Difficulty</th>
+                          <th style={{ padding: "7px 6px", textAlign: "center", fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: "1px solid " + T.border, width: "8%" }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
                   {filtered.map(r => {
                     const a = bestAnalysis(r);
                     if (!a) return null;
                     const exp = selResult === r.qid;
                     const dc = r.difficulty?.composite || 5;
                     const sir = a;
+                    const clmStage = CLM_STAGES.find(c => c.id === (r.lifecycle || "full-stack"));
                     return (
-                      <Card key={r.qid} style={{ cursor: "pointer", borderColor: exp ? T.teal + "30" : T.border }}>
-                        <div onClick={() => setSelResult(exp ? null : r.qid)}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: "flex", gap: 4, marginBottom: 5, flexWrap: "wrap" }}>
-                                <Chip text={r.persona} color={T.purple} />
-                                <Chip text={r.stage} color={stageColor(r.stage)} />
-                                {sir.mentioned && <BadgeEl text={"#" + sir.rank} color={sir.rank <= 2 ? T.green : sir.rank <= 4 ? T.gold : T.red} />}
-                                {!sir.mentioned && <BadgeEl text="ABSENT" color={T.red} />}
-                                <BadgeEl text={dc.toFixed(1) + " " + diffLabel(dc)} color={diffColor(dc)} />
-                                <Chip text={CLM_STAGES.find(c => c.id === (r.lifecycle || "full-stack"))?.label || "Full-Stack CLM"} color={CLM_STAGES.find(c => c.id === (r.lifecycle || "full-stack"))?.color || "#a78bfa"} />
-                              </div>
-                              <div style={{ fontSize: 11, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>"{r.query}"</div>
+                      <React.Fragment key={r.qid}>
+                        {/* Table row (collapsed) */}
+                        <tr
+                          onClick={() => setSelResult(exp ? null : r.qid)}
+                          style={{ cursor: "pointer", background: exp ? T.teal + "08" : "transparent", borderBottom: exp ? "none" : "1px solid " + T.border + "50", transition: "background 0.15s ease" }}
+                        >
+                          {/* Query */}
+                          <td style={{ padding: "8px 10px", verticalAlign: "middle" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <span style={{ fontSize: 9, color: T.dim, fontFamily: T.fontM, flexShrink: 0 }}>{exp ? "▼" : "▶"}</span>
+                              <span style={{ fontSize: 11, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260 }} title={r.query}>{r.query}</span>
                             </div>
-                            <div style={{ display: "flex", gap: 3, flexShrink: 0, flexWrap: "wrap", maxWidth: "40%", justifyContent: "flex-end" }}>
-                              {(sir.vendors_mentioned || []).sort((va, vb) => (va.position || 99) - (vb.position || 99)).slice(0, 5).map((v, vi) => {
-                                const isSirion = v.name.toLowerCase().includes("sirion");
+                          </td>
+                          {/* Persona */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
+                            <span style={{ fontSize: 10, color: T.purple, fontFamily: T.fontM, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", maxWidth: 90 }} title={r.persona}>{r.persona}</span>
+                          </td>
+                          {/* Stage */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
+                            <span style={{ fontSize: 9, padding: "2px 5px", borderRadius: 3, fontWeight: 700, fontFamily: T.fontM, background: stageColor(r.stage) + "18", color: stageColor(r.stage), whiteSpace: "nowrap" }}>{r.stage}</span>
+                          </td>
+                          {/* CLM Lifecycle */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle" }}>
+                            <span style={{ fontSize: 9, padding: "2px 5px", borderRadius: 3, fontWeight: 700, fontFamily: T.fontM, background: (clmStage?.color || "#a78bfa") + "18", color: clmStage?.color || "#a78bfa", whiteSpace: "nowrap" }}>{clmStage?.label?.replace(" CLM", "") || "Full-Stack"}</span>
+                          </td>
+                          {/* LLM Presence */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle", textAlign: "center" }}>
+                            <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                              {(scanData.llms || []).map(lid => {
+                                const la = r.analyses?.[lid];
+                                const present = la && !la._error && la.mentioned;
                                 return (
-                                  <div key={vi} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700, fontFamily: T.fontM, background: isSirion ? T.teal + "20" : "rgba(255,255,255,0.03)", border: "1px solid " + (isSirion ? T.teal : T.border), color: isSirion ? T.teal : (VENDOR_COLORS[v.name] || T.muted), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 110 }} title={"#" + v.position + " " + v.name}>
-                                    #{v.position} {v.name}
+                                  <div key={lid} title={`${LLM_META[lid]?.name}: ${present ? "#" + la.rank : "absent"}`}
+                                    style={{ display: "flex", alignItems: "center", gap: 2, padding: "1px 4px", borderRadius: 3, background: present ? (LLM_META[lid]?.color || T.dim) + "15" : T.red + "08", border: "1px solid " + (present ? (LLM_META[lid]?.color || T.dim) + "30" : T.red + "20") }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: "50%", background: LLM_META[lid]?.color || T.dim }} />
+                                    <span style={{ fontSize: 8, fontFamily: T.fontM, fontWeight: 700, color: present ? (LLM_META[lid]?.color || T.dim) : T.red }}>{present ? "#" + la.rank : "–"}</span>
                                   </div>
                                 );
                               })}
                             </div>
-                            {/* Per-question rescan button */}
+                          </td>
+                          {/* Difficulty */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle", textAlign: "center" }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: T.fontM, color: diffColor(dc) }}>{dc.toFixed(1)} <span style={{ fontSize: 9, fontWeight: 500 }}>{diffLabel(dc)}</span></span>
+                          </td>
+                          {/* Rescan */}
+                          <td style={{ padding: "8px 6px", verticalAlign: "middle", textAlign: "center" }}>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleRescan(r.qid); }}
                               disabled={scanning || rescanning !== null}
                               title="Rescan this question against all LLMs"
                               style={{
-                                flexShrink: 0, padding: "3px 10px", borderRadius: 5,
+                                padding: "2px 8px", borderRadius: 4,
                                 border: "1px solid " + (rescanning === r.qid ? T.teal + "60" : T.border),
                                 background: rescanning === r.qid ? T.teal + "12" : "transparent",
                                 color: rescanning === r.qid ? T.teal : T.dim,
                                 cursor: (scanning || rescanning !== null) ? "not-allowed" : "pointer",
                                 fontSize: 9, fontWeight: 600, fontFamily: T.fontM,
                                 opacity: (scanning || (rescanning && rescanning !== r.qid)) ? 0.3 : 1,
-                                display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
-                                transition: "all 0.2s ease", alignSelf: "center",
+                                display: "inline-flex", alignItems: "center", gap: 3,
                               }}
                             >
                               {rescanning === r.qid ? (
-                                <span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid " + T.teal, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                                <span style={{ display: "inline-block", width: 8, height: 8, border: "1.5px solid " + T.teal, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                               ) : "\u21BB"}
-                              {rescanning === r.qid ? "Scanning..." : "Rescan"}
+                              {rescanning === r.qid ? "..." : "Rescan"}
                             </button>
-                          </div>
-                        </div>
-                        {exp && (() => {
+                          </td>
+                        </tr>
+                        {/* Expanded detail row */}
+                        {exp && <tr style={{ background: T.bgCard, borderBottom: "1px solid " + T.border + "50" }}><td colSpan={7} style={{ padding: 0 }}><div style={{ padding: "14px 16px", borderTop: "1px solid " + T.teal + "25", animation: "fadeUp 0.25s ease" }}>
+                        {(() => {
                           const vendorTable = buildVendorTable(r);
                           const srcAttr = buildSourceAttribution(r);
                           const aggSent = aggregateSentiment(r);
@@ -1406,7 +1476,7 @@ export default function App() {
                             transition: "all 0.2s ease",
                           });
                           return (
-                          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid " + T.border, animation: "fadeUp 0.25s ease" }}>
+                          <div>
 
                             {/* LAYER 1: Consolidated Intelligence Strip */}
                             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "6px 8px", borderRadius: 6, background: "rgba(255,255,255,0.015)", marginBottom: 10 }}>
@@ -1629,9 +1699,13 @@ export default function App() {
                           </div>
                           );
                         })()}
-                      </Card>
+                        </div></td></tr>}
+                      </React.Fragment>
                     );
                   })}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               )}
             </div>

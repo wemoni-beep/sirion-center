@@ -95,8 +95,14 @@ function Dashboard({ t, onNavigate }) {
     return llms.map(lid => {
       let mentioned = 0, total = 0;
       scanResultsArr.forEach(r => {
-        const a = r.analyses?.[lid];
-        if (a && !a._error) { total++; if (a.mentioned) mentioned++; }
+        // Support compact format (r.mentions) and legacy format (r.analyses)
+        if (r.mentions) {
+          total++;
+          if (r.mentions[lid]) mentioned++;
+        } else {
+          const a = r.analyses?.[lid];
+          if (a && !a._error) { total++; if (a.mentioned) mentioned++; }
+        }
       });
       return { llm: llmNames[lid] || lid, rate: total ? Math.round((mentioned / total) * 100) : 0 };
     });

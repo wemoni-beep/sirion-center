@@ -518,16 +518,31 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     });
 
     const askResults = [];
+    const llmDone = {};
     for (let li = 0; li < llmIds.length; li++) {
       if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
-      const caller = LLM_CALLERS[llmIds[li]];
-      if (!caller) { askResults.push({ status: "fulfilled", value: { ok: false, error: "Unknown LLM" } }); continue; }
+      const lid = llmIds[li];
+      // Emit per-LLM start progress
+      onProgress?.({
+        phase: "asking",
+        current: qi * llmIds.length + li,
+        total: totalSteps,
+        query: q.query.substring(0, 60),
+        llm: lid,
+        currentLLM: lid,
+        llmDone: { ...llmDone },
+        status: `Q${qi + 1}/${queries.length}: Asking ${lid}...`,
+        percent: Math.round(((qi * llmIds.length + li) / totalSteps) * 70),
+      });
+      const caller = LLM_CALLERS[lid];
+      if (!caller) { askResults.push({ status: "fulfilled", value: { ok: false, error: "Unknown LLM" } }); llmDone[lid] = qi + 1; continue; }
       try {
         const val = await caller(q.query, onRetry);
         askResults.push({ status: "fulfilled", value: val });
       } catch (reason) {
         askResults.push({ status: "rejected", reason });
       }
+      llmDone[lid] = qi + 1;
     }
     apiCalls += llmIds.length;
 
