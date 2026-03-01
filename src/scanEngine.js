@@ -482,6 +482,11 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
   let apiCalls = 0;
   let retryCount = 0;
   let partialFailures = 0;
+  let completedCount = 0;
+
+  // Process up to PIPELINE_WIDTH queries simultaneously.
+  // LLM throttle() handles rate limiting — concurrent queries just overlap their wait times.
+  const PIPELINE_WIDTH = 3;
 
   const totalSteps = queries.length * llmIds.length;
 
@@ -492,36 +497,32 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     retryCount++;
     onProgress?.({
       phase: "retrying",
-      current: 0,
-      total: totalSteps,
+      current: completedCount,
+      total: queries.length,
       status: `Rate limited (${reason}) — retry ${attempt}/${maxRetries} in ${Math.round(delay / 1000)}s...`,
-      percent: Math.round((results.length / queries.length) * 70),
+      percent: Math.round((completedCount / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [],
       queryCount: queries.length,
     });
   };
 
-  for (let qi = 0; qi < queries.length; qi++) {
-    // Check abort before each question
-    if (abortSignal?.aborted) {
-      throw new DOMException("Scan aborted by user", "AbortError");
-    }
+  // ── Per-query processor — never throws except AbortError ──
+  async function processQuery(qi) {
+    if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
 
     const q = queries[qi];
     const analyses = {};
-
-    // Tracks which LLMs are still in-flight for this query (resets each query)
     const activeSet = new Set(llmIds);
 
-    // ── Wave 1: Ask ALL LLMs in PARALLEL — each updates llmDone as it finishes ──
+    // Wave 1: Ask ALL LLMs in PARALLEL — each updates llmDone as it finishes
     onProgress?.({
       phase: "scanning",
-      current: qi * llmIds.length,
+      current: completedCount * llmIds.length,
       total: totalSteps,
       query: q.query.substring(0, 60),
       status: `Q${qi + 1}/${queries.length}: Sending to ${llmIds.join(", ")}...`,
-      percent: Math.round((qi / queries.length) * 70),
+      percent: Math.round((completedCount / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [...activeSet],
       queryCount: queries.length,
@@ -529,7 +530,6 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
 
     if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
 
-    // Fire all LLM calls simultaneously. Each resolves individually and emits progress.
     const llmPromises = llmIds.map(lid => {
       const caller = LLM_CALLERS[lid];
       if (!caller) {
@@ -542,11 +542,11 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
           activeSet.delete(lid);
           onProgress?.({
             phase: "scanning",
-            current: qi * llmIds.length + (llmIds.length - activeSet.size),
+            current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
             total: totalSteps,
             query: q.query.substring(0, 60),
             status: `Q${qi + 1}/${queries.length}: ${lid} responded`,
-            percent: Math.round((qi / queries.length) * 70),
+            percent: Math.round((completedCount / queries.length) * 70),
             llmDone: { ...llmDone },
             activeLLMs: [...activeSet],
             queryCount: queries.length,
@@ -558,11 +558,11 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
           activeSet.delete(lid);
           onProgress?.({
             phase: "scanning",
-            current: qi * llmIds.length + (llmIds.length - activeSet.size),
+            current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
             total: totalSteps,
             query: q.query.substring(0, 60),
             status: `Q${qi + 1}/${queries.length}: ${lid} error`,
-            percent: Math.round((qi / queries.length) * 70),
+            percent: Math.round((completedCount / queries.length) * 70),
             llmDone: { ...llmDone },
             activeLLMs: [...activeSet],
             queryCount: queries.length,
@@ -574,20 +574,19 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     const askResultsList = await Promise.all(llmPromises);
     apiCalls += llmIds.length;
 
-    // ── Wave 2: Batch-analyze ALL responses in ONE Claude call ──
+    // Wave 2: Batch-analyze ALL responses in ONE Claude call
     onProgress?.({
       phase: "analyzing",
-      current: qi * llmIds.length + llmIds.length,
+      current: completedCount * llmIds.length + llmIds.length,
       total: totalSteps,
       query: q.query.substring(0, 60),
       status: `Q${qi + 1}/${queries.length}: Analyzing responses...`,
-      percent: Math.round(((qi + 0.5) / queries.length) * 70),
+      percent: Math.round((completedCount / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [],
       queryCount: queries.length,
     });
 
-    // Collect successful responses for batch analysis
     const successfulResponses = {};
     const responseTexts = {};
     askResultsList.forEach(({ lid, result }) => {
@@ -602,22 +601,18 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       }
     });
 
-    // One Claude call analyzes all successful responses at once
     if (Object.keys(successfulResponses).length > 0) {
-      apiCalls++; // Just 1 API call for all analyses
+      apiCalls++;
       const batchResult = await analyzeBatch(q.query, successfulResponses, company, onRetry, 45000);
 
-      // Distribute batch results back to per-LLM analyses
       Object.entries(batchResult).forEach(([llmId, analysis]) => {
         if (!analysis || analysis._error) {
           analyses[llmId] = analysis || { ...ERROR_ANALYSIS, _error: "Missing from batch" };
           return;
         }
-        // Attach response text
         const resp = responseTexts[llmId];
         analysis.response_snippet = resp?.text?.substring(0, 300) || "";
         analysis.full_response = resp?.text || "";
-        // Merge Perplexity citations
         if (resp?.citations?.length > 0) {
           const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
           resp.citations.forEach(url => {
@@ -630,7 +625,6 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
             } catch {}
           });
         }
-        // Post-analysis fallback for citation fields
         const sources = analysis.cited_sources || [];
         if (typeof analysis.citation_presence !== "boolean") analysis.citation_presence = sources.length > 0;
         if (typeof analysis.sirion_content_cited !== "boolean") {
@@ -639,55 +633,55 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
         analyses[llmId] = analysis;
       });
 
-      // Fill in any LLMs not returned by batch
       llmIds.forEach(id => {
         if (!analyses[id]) analyses[id] = { ...ERROR_ANALYSIS, _error: "Not in batch result" };
       });
     }
 
-    // Score difficulty based on all analyses for this query
     const difficulty = scoreDifficulty(analyses);
-
     const resultItem = {
-      qid: q.id,
-      query: q.query,
-      persona: q.persona,
-      stage: q.stage,
-      cw: q.cw,
-      lifecycle: q.lifecycle || "full-stack",
-      analyses,
-      difficulty,
+      qid: q.id, query: q.query, persona: q.persona, stage: q.stage,
+      cw: q.cw, lifecycle: q.lifecycle || "full-stack", analyses, difficulty,
     };
     results.push(resultItem);
 
-    // Incremental save: notify caller so result can be persisted immediately
     if (onResultReady) {
-      try {
-        await onResultReady(resultItem, qi, queries.length);
-      } catch (e) {
-        errors.push({ qid: q.id, llm: "_save", error: "Incremental save failed: " + e.message });
-      }
+      try { await onResultReady(resultItem, qi, queries.length); }
+      catch (e) { errors.push({ qid: q.id, llm: "_save", error: "Incremental save failed: " + e.message }); }
     }
 
-    // Progress after full query analyzed
+    completedCount++;
     onProgress?.({
       phase: "analyzed",
-      current: qi + 1,
+      current: completedCount,
       total: queries.length,
       query: q.query.substring(0, 60),
-      status: `${qi + 1}/${queries.length} questions done`,
-      percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
+      status: `${completedCount}/${queries.length} questions done`,
+      percent: 70 + Math.round((completedCount / queries.length) * 30),
       llmDone: { ...llmDone },
       activeLLMs: [],
       queryCount: queries.length,
     });
+  }
 
-    // Minimal gap between queries — throttle() inside each LLM caller handles rate limits.
-    // Only add extra breathing room if we're not on the last query.
-    if (qi < queries.length - 1) {
-      await new Promise(r => setTimeout(r, 300));
+  // ── Sliding window: keep PIPELINE_WIDTH queries in flight simultaneously ──
+  // As each query finishes, the next one starts immediately — no idle gaps.
+  // The per-LLM throttle() handles rate limiting transparently.
+  const inFlight = new Set();
+  for (let qi = 0; qi < queries.length; qi++) {
+    if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
+
+    const p = processQuery(qi);
+    inFlight.add(p);
+    p.finally(() => inFlight.delete(p));
+
+    if (inFlight.size >= PIPELINE_WIDTH) {
+      // Wait for the fastest in-flight query to finish before queuing another
+      await Promise.race([...inFlight]);
     }
   }
+  // Drain remaining in-flight queries
+  await Promise.all([...inFlight]);
 
   // Compute aggregate scores
   const scores = computeScores(results, llmIds);
