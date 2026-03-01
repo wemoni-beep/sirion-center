@@ -126,7 +126,7 @@ Respond exactly as you would for any real user asking this question:
 - Do NOT compress or abbreviate your response. Give the full answer a decision maker deserves.
 - Maintain a professional, neutral, and practical tone throughout.`;
 
-const LLM_MAX_TOKENS = 2000; // Enough for a thorough 600-800 word response (cost-optimized)
+const LLM_MAX_TOKENS = 1200; // Enough for a solid 350-450 word response (cost-optimized)
 
 async function askClaude(question, onRetry, timeoutMs = 90000) {
   if (!ANTHROPIC_KEY) return { ok: false, error: "No API key" };
@@ -357,7 +357,7 @@ async function analyzeBatch(question, responses, company, onRetry, timeoutMs = 4
 
   // Build combined prompt with all successful responses
   const responseSections = Object.entries(responses)
-    .map(([llmId, resp]) => `=== ${llmId.toUpperCase()} RESPONSE ===\n"""${resp.substring(0, 5000)}"""`)
+    .map(([llmId, resp]) => `=== ${llmId.toUpperCase()} RESPONSE ===\n"""${resp.substring(0, 2500)}"""`)
     .join("\n\n");
 
   const llmKeys = Object.keys(responses);
@@ -380,7 +380,7 @@ Each value must follow the analysis schema. Return JSON only.`;
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
         model: "claude-3-5-haiku-20241022",
-        max_tokens: 4096,
+        max_tokens: 1800,
         system: ANALYSIS_SYSTEM + `\n\nIMPORTANT: You are analyzing MULTIPLE responses at once. Return a JSON object where each key is an LLM name (${llmKeys.join(", ")}) and each value is the full analysis object following the schema above. Example structure: {"claude": {...}, "gemini": {...}, "openai": {...}}`,
         messages: [{ role: "user", content: userMsg }],
       }),
