@@ -150,7 +150,6 @@ const fileBackup = {
 
 // Firestore DB operations with full error visibility
 let _lastDbError = null;
-let _errorLogged = false; // Only log Firebase errors once to avoid console spam
 
 export const db = {
   getLastError() { return _lastDbError; },
@@ -169,7 +168,7 @@ export const db = {
       if (!res.ok) {
         const err = await res.text();
         _lastDbError = `Save failed (${res.status}): ${err.substring(0, 200)}`;
-        if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+        console.warn("Firebase:", _lastDbError);
         const tmpId = "local_" + Date.now();
         localCache.set(collection, tmpId, data);
         fileBackup.save(collection, tmpId, data);
@@ -181,7 +180,7 @@ export const db = {
       return docId;
     } catch (e) {
       _lastDbError = `Save exception: ${e.message}`;
-      if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+      console.warn("Firebase:", _lastDbError);
       const tmpId = "local_" + Date.now();
       localCache.set(collection, tmpId, data);
       fileBackup.save(collection, tmpId, data);
@@ -206,13 +205,13 @@ export const db = {
       if (!res.ok) {
         const err = await res.text();
         _lastDbError = `Update failed (${res.status}): ${err.substring(0, 200)}`;
-        if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+        console.warn("Firebase:", _lastDbError);
         return false;
       }
       return true;
     } catch (e) {
       _lastDbError = `Update exception: ${e.message}`;
-      if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+      console.warn("Firebase:", _lastDbError);
       return false;
     }
   },
@@ -226,7 +225,7 @@ export const db = {
       if (!res.ok) {
         const err = await res.text();
         _lastDbError = `GetAll failed (${res.status}): ${err.substring(0, 200)}`;
-        if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+        console.warn("Firebase:", _lastDbError);
         // Fallback: localStorage -> file backup
         const cached = localCache.getAll(collection);
         if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase failed)`); return cached; }
@@ -244,7 +243,7 @@ export const db = {
       return docs;
     } catch (e) {
       _lastDbError = `GetAll exception: ${e.message}`;
-      if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+      console.warn("Firebase:", _lastDbError);
       // Fallback: localStorage -> file backup
       const cached = localCache.getAll(collection);
       if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
@@ -290,13 +289,13 @@ export const db = {
       if (!res.ok) {
         const err = await res.text();
         _lastDbError = `SaveWithId failed (${res.status}): ${err.substring(0, 200)}`;
-        if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+        console.warn("Firebase:", _lastDbError);
         return false;
       }
       return true;
     } catch (e) {
       _lastDbError = `SaveWithId exception: ${e.message}`;
-      if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+      console.warn("Firebase:", _lastDbError);
       return false;
     }
   },
@@ -315,7 +314,7 @@ export const db = {
         if (!res.ok) {
           const err = await res.text();
           _lastDbError = `GetAllPaginated failed (${res.status}): ${err.substring(0, 200)}`;
-          if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+          console.warn("Firebase:", _lastDbError);
           fbFailed = true;
           break;
         }
@@ -341,7 +340,7 @@ export const db = {
       return all;
     } catch (e) {
       _lastDbError = `GetAllPaginated exception: ${e.message}`;
-      if (!_errorLogged) { console.warn("Firebase:", _lastDbError); _errorLogged = true; }
+      console.warn("Firebase:", _lastDbError);
       // Fallback: localStorage -> file backup
       const cached = localCache.getAll(collection);
       if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
