@@ -264,6 +264,10 @@ export default function App() {
   // Abort controller for scan cancellation
   const abortRef = useRef(null);
 
+  // ETA timer — tracks elapsed + estimated remaining during an active scan
+  const scanStartRef = useRef(null);
+  const [scanETA, setScanETA] = useState(null); // { elapsed, remaining } in seconds, or null
+
   // ── Single combined hydration: load scan history + decide question bank source ──
   // M1 pipeline questions ALWAYS win over saved bank (they are the source of truth).
   // This single effect eliminates the race between async Firebase load and pipeline read.
@@ -423,6 +427,19 @@ export default function App() {
     }
     db.saveWithId("m2_config", "question_bank", { queries, savedAt: new Date().toISOString() }).catch(() => {});
   }, [queries, queriesLoaded]);
+
+  // ETA ticker — runs every second while scan is active
+  useEffect(() => {
+    if (!scanning) { setScanETA(null); return; }
+    scanStartRef.current = scanStartRef.current || Date.now();
+    const interval = setInterval(() => {
+      const elapsed = Math.round((Date.now() - scanStartRef.current) / 1000);
+      const pct = scanProgress?.percent || 0;
+      const remaining = pct > 5 ? Math.round(elapsed / (pct / 100) - elapsed) : null;
+      setScanETA({ elapsed, remaining });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [scanning, scanProgress?.percent]); // eslint-disable-line
 
   // Watch for LIVE M1 exports (user exports new questions while already on M2)
   const m1GenRef = useRef(pipeline.m1.generatedAt || null);
@@ -673,6 +690,7 @@ export default function App() {
     const scanDate = isResume ? (resumeOptions.scanDate || new Date().toISOString()) : new Date().toISOString();
 
     setScanning(true);
+    scanStartRef.current = Date.now();
     setScanError("");
     setSaveWarnings([]);
     setScanProgress({ phase: "starting", percent: 0, status: isResume ? `Resuming scan (${prevCompleted} already done)...` : "Initializing scan..." });
@@ -1189,6 +1207,18 @@ export default function App() {
                       );
                     })}
                   </div>
+                  {/* ETA counter */}
+                  {scanETA && (() => {
+                    const fmt = s => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+                    return (
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)", border: "1px solid " + T.border, marginBottom: 10, fontFamily: T.fontM }}>
+                        <span style={{ fontSize: 10, color: T.dim }}>⏱ {fmt(scanETA.elapsed)} elapsed</span>
+                        {scanETA.remaining !== null && (
+                          <span style={{ fontSize: 10, color: T.teal, fontWeight: 600 }}>~{fmt(scanETA.remaining)} remaining</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div style={{ marginTop: 10 }}>
                     <Btn onClick={handleCancelScan} style={{ borderColor: T.red, color: T.red }}>Cancel Scan</Btn>
                   </div>
