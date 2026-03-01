@@ -821,15 +821,38 @@ export default function QuestionGenerator({ onNavigate }) {
   const pipelineQuestions = pipeline.m1.questions || [];
   const questions = useMemo(() => {
     if (!generated) return [];
-    const seen = new Set();
+    const seenMap = new Map(); // hash → index in merged
     const merged = [];
 
-    const addQ = (q) => {
+    // Adds a new question OR merges fields into an existing one with the same text hash.
+    // mergeMetadata: fill in missing persona/stage/cluster from later tiers (e.g. static bank)
+    // mergeEnrichment: always overwrite enrichment fields (personaFit, intentType, etc.) from KB
+    const addQ = (q, { mergeMetadata = false, mergeEnrichment = false } = {}) => {
       const hash = questionHash(q.query);
-      if (!seen.has(hash)) { seen.add(hash); merged.push(q); }
+      if (!seenMap.has(hash)) {
+        seenMap.set(hash, merged.length);
+        merged.push({ ...q });
+      } else {
+        const existing = merged[seenMap.get(hash)];
+        if (mergeMetadata) {
+          if (!existing.persona && q.persona) existing.persona = q.persona;
+          if (!existing.stage && q.stage) existing.stage = q.stage;
+          if (!existing.cluster && q.cluster) existing.cluster = q.cluster;
+          if (!existing.lifecycle && q.lifecycle) existing.lifecycle = q.lifecycle;
+          if (!existing.classification && q.classification) existing.classification = q.classification;
+        }
+        if (mergeEnrichment) {
+          if (q.personaFit != null) existing.personaFit = q.personaFit;
+          if (q.bestPersona) existing.bestPersona = q.bestPersona;
+          if (q.intentType) existing.intentType = q.intentType;
+          if (q.volumeTier) existing.volumeTier = q.volumeTier;
+          if (q.criterion) existing.criterion = q.criterion;
+          if (q.enrichedAt) existing.enrichedAt = q.enrichedAt;
+        }
+      }
     };
 
-    // Tier 1: Pipeline questions — source of truth, shown in full
+    // Tier 1: Pipeline questions — source of truth for identity/ordering
     pipelineQuestions.forEach(q => addQ({
       id: q.id,
       query: q.query,
@@ -841,22 +864,23 @@ export default function QuestionGenerator({ onNavigate }) {
       classification: q.classification || "macro",
     }));
 
-    // Tier 2: Static Q_BANK — adds any not already in pipeline
+    // Tier 2: Static Q_BANK — fills missing persona/stage on pipeline questions that lost metadata
     Q_BANK.forEach((q, i) => addQ({
         id: `q-${i + 1}`,
         query: q.q.replace(/\{company\}/g, company),
         persona: q.p, stage: q.s, cluster: q.c,
         lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
         source: "static", classification: "macro",
-      }));
+      }, { mergeMetadata: true }));
 
-    // Tier 3: Cached KB questions (preserve persona-research source)
-    kbQuestions
-      .forEach(q => addQ({ ...q, source: q.source === "persona-research" ? "persona-research" : "kb" }));
+    // Tier 3: Cached KB questions — merges enrichment fields into existing questions
+    kbQuestions.forEach(q => addQ(
+      { ...q, source: q.source === "persona-research" ? "persona-research" : "kb" },
+      { mergeMetadata: true, mergeEnrichment: true }
+    ));
 
     // Tier 4: Fresh AI questions (generated in current session)
-    aiQuestions
-      .forEach(q => addQ(q));
+    aiQuestions.forEach(q => addQ(q, { mergeEnrichment: true }));
 
     return merged;
   }, [generated, company, aiQuestions, kbQuestions, pipelineQuestions]);
