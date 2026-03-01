@@ -448,6 +448,34 @@ export default function QuestionGenerator({ onNavigate }) {
   const [researchStep, setResearchStep] = useState(0);
   const [targetPersonaId, setTargetPersonaId] = useState("all"); // for persona-specific question gen
   const fileInputRef = useRef(null);
+  const pipelineMigratedRef = useRef(false);
+
+  // ── One-time migration: save pipeline questions to KB so they persist ──
+  useEffect(() => {
+    if (pipelineMigratedRef.current) return;
+    if (!pipeline._loaded) return;
+    const pqs = pipeline.m1?.questions;
+    if (!pqs || pqs.length === 0) return;
+    pipelineMigratedRef.current = true;
+    const companyName = pipeline.meta?.company || company;
+    const toSave = pqs.map(q => ({
+      id: q.id || `q-pipeline-${questionHash(q.query)}`,
+      query: q.query,
+      persona: q.persona,
+      stage: q.stage,
+      cluster: q.cw || q.cluster || "",
+      lifecycle: q.lifecycle || "full-stack",
+      source: q.source || "pipeline",
+      classification: q.classification || "macro",
+      company: companyName,
+      savedAt: new Date().toISOString(),
+    }));
+    saveQuestions(toSave).catch(() => {});
+    // Also persist to Firebase collection so it survives IndexedDB clear
+    toSave.forEach(q => {
+      db.saveWithId("m1_questions_v2", q.id, q).catch(() => {});
+    });
+  }, [pipeline._loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load KB stats + personas on mount, hydrate from Firebase ──
   useEffect(() => {
@@ -529,24 +557,7 @@ export default function QuestionGenerator({ onNavigate }) {
       if (!seen.has(hash)) { seen.add(hash); merged.push(q); }
     };
 
-    // Tier 1: Static Q_BANK — ALL questions, no persona/cluster filter
-    Q_BANK.forEach((q, i) => addQ({
-        id: `q-${i + 1}`,
-        query: q.q.replace(/\{company\}/g, company),
-        persona: q.p, stage: q.s, cluster: q.c,
-        lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
-        source: "static", classification: "macro",
-      }));
-
-    // Tier 2: Cached KB questions (preserve persona-research source)
-    kbQuestions
-      .forEach(q => addQ({ ...q, source: q.source === "persona-research" ? "persona-research" : "kb" }));
-
-    // Tier 3: Fresh AI questions (generated in current session)
-    aiQuestions
-      .forEach(q => addQ(q));
-
-    // Tier 4: Pipeline questions from Firebase (catches AI questions from previous sessions)
+    // Tier 1: Pipeline questions — source of truth, shown in full
     pipelineQuestions.forEach(q => addQ({
       id: q.id,
       query: q.query,
@@ -557,6 +568,23 @@ export default function QuestionGenerator({ onNavigate }) {
       source: q.source || "pipeline",
       classification: q.classification || "macro",
     }));
+
+    // Tier 2: Static Q_BANK — adds any not already in pipeline
+    Q_BANK.forEach((q, i) => addQ({
+        id: `q-${i + 1}`,
+        query: q.q.replace(/\{company\}/g, company),
+        persona: q.p, stage: q.s, cluster: q.c,
+        lifecycle: q.l || CLUSTER_LIFECYCLE_MAP[q.c] || "full-stack",
+        source: "static", classification: "macro",
+      }));
+
+    // Tier 3: Cached KB questions (preserve persona-research source)
+    kbQuestions
+      .forEach(q => addQ({ ...q, source: q.source === "persona-research" ? "persona-research" : "kb" }));
+
+    // Tier 4: Fresh AI questions (generated in current session)
+    aiQuestions
+      .forEach(q => addQ(q));
 
     return merged;
   }, [generated, company, aiQuestions, kbQuestions, pipelineQuestions]);
