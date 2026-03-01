@@ -93,7 +93,7 @@ async function fetchWithRetry(url, options, onRetry, timeoutMs = 30000) {
    ─────────────────────────────────────────────── */
 
 const llmLastCall = { claude: 0, gemini: 0, openai: 0, perplexity: 0 };
-const LLM_MIN_GAP = { claude: 2500, gemini: 1200, openai: 800, perplexity: 800 };
+const LLM_MIN_GAP = { claude: 1000, gemini: 1000, openai: 600, perplexity: 600 };
 
 async function throttle(llmId) {
   const now = Date.now();
@@ -505,45 +505,27 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     const q = queries[qi];
     const analyses = {};
 
-    // ── Wave 1: Ask LLMs SEQUENTIALLY to avoid connection overload ──
-    // (Parallel asks cause 3 simultaneous connections — triggers network errors)
+    // ── Wave 1: Ask ALL LLMs in PARALLEL (3–4x faster than sequential) ──
     onProgress?.({
       phase: "scanning",
       current: qi * llmIds.length,
       total: totalSteps,
       query: q.query.substring(0, 60),
       llm: llmIds.join("+"),
-      status: `Q${qi + 1}/${queries.length}: Asking ${llmIds.join(", ")}...`,
+      status: `Q${qi + 1}/${queries.length}: Asking ${llmIds.join(", ")} in parallel...`,
       percent: Math.round((qi / queries.length) * 70),
     });
 
-    const askResults = [];
-    const llmDone = {};
-    for (let li = 0; li < llmIds.length; li++) {
-      if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
-      const lid = llmIds[li];
-      // Emit per-LLM start progress
-      onProgress?.({
-        phase: "asking",
-        current: qi * llmIds.length + li,
-        total: totalSteps,
-        query: q.query.substring(0, 60),
-        llm: lid,
-        currentLLM: lid,
-        llmDone: { ...llmDone },
-        status: `Q${qi + 1}/${queries.length}: Asking ${lid}...`,
-        percent: Math.round(((qi * llmIds.length + li) / totalSteps) * 70),
-      });
-      const caller = LLM_CALLERS[lid];
-      if (!caller) { askResults.push({ status: "fulfilled", value: { ok: false, error: "Unknown LLM" } }); llmDone[lid] = qi + 1; continue; }
-      try {
-        const val = await caller(q.query, onRetry);
-        askResults.push({ status: "fulfilled", value: val });
-      } catch (reason) {
-        askResults.push({ status: "rejected", reason });
-      }
-      llmDone[lid] = qi + 1;
-    }
+    if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
+
+    // Fire all LLM calls simultaneously — throttle() inside each caller spaces them if needed
+    const askResults = await Promise.allSettled(
+      llmIds.map(lid => {
+        const caller = LLM_CALLERS[lid];
+        if (!caller) return Promise.resolve({ ok: false, error: "Unknown LLM" });
+        return caller(q.query, onRetry);
+      })
+    );
     apiCalls += llmIds.length;
 
     // ── Wave 2: Batch-analyze ALL responses in ONE Claude call ──
@@ -652,9 +634,10 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
     });
 
-    // Cool-down between queries to prevent rate limiting (4s pause)
+    // Minimal gap between queries — throttle() inside each LLM caller handles rate limits.
+    // Only add extra breathing room if we're not on the last query.
     if (qi < queries.length - 1) {
-      await new Promise(r => setTimeout(r, 4000));
+      await new Promise(r => setTimeout(r, 300));
     }
   }
 
