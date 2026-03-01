@@ -572,6 +572,20 @@ function SettingsPage({ t }) {
   );
 }
 
+/* ── Universal loading gate — blocks all modules until pipeline data arrives from Firebase ── */
+function ModuleArea({ renderContent, t }) {
+  const { pipeline } = usePipeline();
+  if (!pipeline._loaded) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14, background: t.bg }}>
+        <div style={{ width: 34, height: 34, borderRadius: "50%", border: "3px solid " + t.brand + "30", borderTopColor: t.brand, animation: "spin 0.8s linear infinite" }} />
+        <span style={{ fontSize: 12, color: t.dim, fontFamily: "var(--mono)", letterSpacing: 0.5 }}>Syncing your growth engine...</span>
+      </div>
+    );
+  }
+  return renderContent();
+}
+
 /* ── Main App ── */
 export default function App() {
   const [isDark, setIsDark] = useState(true);
@@ -731,10 +745,10 @@ export default function App() {
           </div>
 
           {/* Content */}
-          <div style={{ flex: 1, overflow: "auto", padding: mob ? 16 : "32px 40px" }}>
-            <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-              <div className="fade-up" key={active}>
-                {renderContent()}
+          <div style={{ flex: 1, overflow: "auto", padding: mob ? 16 : "32px 40px", display: "flex", flexDirection: "column" }}>
+            <div style={{ maxWidth: 1200, margin: "0 auto", width: "100%", flex: 1 }}>
+              <div className="fade-up" key={active} style={{ height: "100%" }}>
+                <ModuleArea renderContent={renderContent} t={t} />
               </div>
             </div>
           </div>

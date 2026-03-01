@@ -969,17 +969,20 @@ export default function App() {
 
         <div style={{ padding: "24px 28px", maxWidth: 1100 }}>
 
+          {/* ═══ UNIVERSAL HYDRATION LOADER ═══ */}
+          {hydrating ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 0", gap: 16 }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", border: "3px solid " + T.teal + "30", borderTopColor: T.teal, animation: "spin 0.8s linear infinite" }} />
+              <div style={{ fontSize: 13, color: T.muted, textAlign: "center" }}>
+                Loading data from database...
+              </div>
+            </div>
+          ) : (<>
+
           {/* ═══ OVERVIEW ═══ */}
           {nav === "overview" && (
             <div style={{ animation: "fadeUp 0.35s ease" }}>
-              {hydrating ? (
-                <Card>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "30px 0" }}>
-                    <div style={{ width: 24, height: 24, borderRadius: "50%", border: "3px solid " + T.teal + "40", borderTopColor: T.teal, animation: "spin 0.8s linear infinite" }} />
-                    <span style={{ fontSize: 13, color: T.muted }}>Loading scan data from database...</span>
-                  </div>
-                </Card>
-              ) : !scanData ? (
+              {!scanData ? (
                 <>
                   <EmptyState icon={"\uD83D\uDD2D"} title="No Scan Data Yet" description="Run your first AI perception scan to see how your company is positioned across AI platforms." action={<Btn primary onClick={() => setNav("scan")}>{"\u26A1"} Go to Run Scan</Btn>} />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
@@ -2080,6 +2083,7 @@ export default function App() {
             </div>
           )}
 
+          </>)} {/* end hydrating ternary */}
         </div>
       </div>
     </div>
