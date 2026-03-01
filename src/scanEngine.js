@@ -498,6 +498,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round((results.length / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [],
+      queryCount: queries.length,
     });
   };
 
@@ -523,6 +524,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round((qi / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [...activeSet],
+      queryCount: queries.length,
     });
 
     if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
@@ -547,6 +549,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
             percent: Math.round((qi / queries.length) * 70),
             llmDone: { ...llmDone },
             activeLLMs: [...activeSet],
+            queryCount: queries.length,
           });
           return { lid, result };
         })
@@ -562,6 +565,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
             percent: Math.round((qi / queries.length) * 70),
             llmDone: { ...llmDone },
             activeLLMs: [...activeSet],
+            queryCount: queries.length,
           });
           return { lid, result: { ok: false, error: err.message } };
         });
@@ -580,6 +584,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: Math.round(((qi + 0.5) / queries.length) * 70),
       llmDone: { ...llmDone },
       activeLLMs: [],
+      queryCount: queries.length,
     });
 
     // Collect successful responses for batch analysis
@@ -674,6 +679,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
       percent: 70 + Math.round(((qi + 1) / queries.length) * 30),
       llmDone: { ...llmDone },
       activeLLMs: [],
+      queryCount: queries.length,
     });
 
     // Minimal gap between queries — throttle() inside each LLM caller handles rate limits.
@@ -717,6 +723,7 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     percent: 100,
     llmDone: { ...llmDone },
     activeLLMs: [],
+    queryCount: queries.length,
   });
 
   return scanResult;
