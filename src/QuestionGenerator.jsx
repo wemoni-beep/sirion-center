@@ -1060,12 +1060,14 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
 
     if (batchErrors === batches.length) {
       setAiError(`Enrichment failed: all ${batches.length} API calls returned no results. Check API key.`);
+      setEnrichmentStep("");
       setEnrichmentLoading(false);
       setEnrichmentProgress({ done: 0, total: 0 });
       return;
     }
     if (enrichmentMap.size === 0) {
       setAiError("Enrichment returned no classifications. Try again.");
+      setEnrichmentStep("");
       setEnrichmentLoading(false);
       setEnrichmentProgress({ done: 0, total: 0 });
       return;
@@ -1084,8 +1086,16 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
       })
       .filter(Boolean);
 
-    await saveQuestions(toSave);
-    setEnrichmentLog(prev => [...prev, `Saved ${toSave.length} enriched questions to local DB`]);
+    try {
+      await saveQuestions(toSave);
+      setEnrichmentLog(prev => [...prev, `Saved ${toSave.length} enriched questions to local DB`]);
+    } catch (saveErr) {
+      setAiError(`Failed to save enriched questions: ${saveErr.message}`);
+      setEnrichmentStep("");
+      setEnrichmentLoading(false);
+      setEnrichmentProgress({ done: 0, total: 0 });
+      return;
+    }
 
     // Phase 3: Firebase background sync
     setEnrichmentStep("Building decision matrix...");
@@ -1109,6 +1119,7 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
       setEnrichmentLog(prev => [...prev, `Done — ${toSave.length} of ${allQs.length} questions enriched`]);
     } catch (e) {
       setAiError(`Enrichment saved but reload failed: ${e.message}`);
+      setEnrichmentStep("");
     }
 
     setEnrichmentLoading(false);
@@ -1714,6 +1725,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
     if (!persona) return;
     setResearchingId(personaId);
     setResearchStep(0);
+    setImportError(""); // clear any stale error before new research run
 
     try {
       setResearchStep(1);

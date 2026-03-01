@@ -827,10 +827,11 @@ export default function App() {
         db.saveWithId("m2_scan_meta", scanId, { ...scanMeta, status: "failed", error: e.message }).catch(() => {});
         setScanError(e.message);
       }
+    } finally {
+      abortRef.current = null;
+      setScanning(false);
+      setScanProgress(null);
     }
-    abortRef.current = null;
-    setScanning(false);
-    setScanProgress(null);
   };
 
   // Cancel running scan

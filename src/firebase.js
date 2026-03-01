@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════ */
 
 export const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyB21j9XJmSf-SaHxcF780TfSojsOtfoC9c",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-deploy-08480747-ed13b"
 };
 
