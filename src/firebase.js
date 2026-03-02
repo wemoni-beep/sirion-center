@@ -2,9 +2,12 @@
    SHARED FIREBASE CONFIGURATION & HELPERS
    ═══════════════════════════════════════════ */
 
+// Firebase web API keys are public by design (security = Firestore rules).
+// Read from Cloudflare Pages env vars (injected at build time via VITE_ prefix),
+// with hardcoded fallback for safety.
 export const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-deploy-08480747-ed13b"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCbZIwkEHKy8r3HSxmLNFau6lnD-VeG_Q8",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-persona-stage"
 };
 
 export const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
@@ -365,3 +368,77 @@ export const db = {
     }
   }
 };
+
+/* ═══════════════════════════════════════════
+   API KEY MANAGEMENT — Firebase-backed, localStorage-cached
+   Keys are stored in Firebase (app_config/api_keys) so they
+   persist across browsers/devices after Cloudflare deployment.
+   On boot, keys are loaded from Firebase → localStorage.
+   Getter functions in scanEngine.js/claudeApi.js read localStorage.
+   ═══════════════════════════════════════════ */
+
+const API_KEY_COLLECTION = "app_config";
+const API_KEY_DOC = "api_keys";
+const API_KEY_FIELDS = ["xt_anthropic_key", "xt_gemini_key", "xt_openai_key", "xt_perplexity_key"];
+
+/**
+ * Load API keys from Firebase into localStorage.
+ * Called on app boot so getter functions work immediately.
+ */
+export async function loadApiKeys() {
+  try {
+    const url = `${FS_BASE}/${API_KEY_COLLECTION}/${API_KEY_DOC}?key=${FIREBASE_CONFIG.apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const doc = await res.json();
+    if (!doc.fields) return null;
+    const keys = {};
+    for (const field of API_KEY_FIELDS) {
+      const val = fromFsVal(doc.fields[field]);
+      if (val) {
+        localStorage.setItem(field, val);
+        keys[field] = val;
+      }
+    }
+    console.info("[ApiKeys] Loaded from Firebase:", Object.keys(keys).length, "keys");
+    return keys;
+  } catch (e) {
+    console.warn("[ApiKeys] Firebase load failed:", e.message);
+    return null;
+  }
+}
+
+/**
+ * Save API keys to both localStorage (immediate) and Firebase (durable).
+ */
+export async function saveApiKeys(keys) {
+  for (const field of API_KEY_FIELDS) {
+    if (keys[field]) {
+      localStorage.setItem(field, keys[field]);
+    } else {
+      localStorage.removeItem(field);
+    }
+  }
+  try {
+    const fields = {};
+    for (const field of API_KEY_FIELDS) {
+      fields[field] = toFsVal(keys[field] || "");
+    }
+    fields.updated_at = toFsVal(new Date().toISOString());
+    const url = `${FS_BASE}/${API_KEY_COLLECTION}/${API_KEY_DOC}?key=${FIREBASE_CONFIG.apiKey}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields }),
+    });
+    if (!res.ok) {
+      console.warn("[ApiKeys] Firebase save failed:", (await res.text()).substring(0, 200));
+      return false;
+    }
+    console.info("[ApiKeys] Saved to Firebase");
+    return true;
+  } catch (e) {
+    console.warn("[ApiKeys] Firebase save exception:", e.message);
+    return false;
+  }
+}

@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, useEffect, useRef, useCallback } from "react";
-import { db } from "./firebase.js";
+import { db, loadApiKeys } from "./firebase.js";
 
 const COLLECTION = "pipelines";
 
@@ -45,11 +45,13 @@ export function PipelineProvider({ children }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Load latest pipeline from Firebase on mount
+  // Load latest pipeline + API keys from Firebase on mount
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        // Load API keys from Firebase → localStorage so LLM getters work immediately
+        loadApiKeys().catch(() => {});
         const docs = await db.getAll(COLLECTION);
         if (cancelled) return;
         if (docs.length > 0) {

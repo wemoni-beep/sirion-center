@@ -9,6 +9,7 @@ import AuthorityRing from "./AuthorityRing";
 import BuyingStageGuide from "./BuyingStageGuide";
 import CLMAdvisor from "./CLMAdvisor";
 import VisualDemo from "./VisualDemo";
+import { saveApiKeys } from "./firebase";
 
 /* ═══════════════════════════════════════════════════════
    XTRUSIO — AI Organic Growth Engine
@@ -513,9 +514,14 @@ function SettingsPage({ t }) {
   const [saved, setSaved] = useState(false);
 
   function saveKeys() {
-    anthropicKey ? localStorage.setItem("xt_anthropic_key", anthropicKey) : localStorage.removeItem("xt_anthropic_key");
-    geminiKey ? localStorage.setItem("xt_gemini_key", geminiKey) : localStorage.removeItem("xt_gemini_key");
-    openaiKey ? localStorage.setItem("xt_openai_key", openaiKey) : localStorage.removeItem("xt_openai_key");
+    const keys = {
+      xt_anthropic_key: anthropicKey,
+      xt_gemini_key: geminiKey,
+      xt_openai_key: openaiKey,
+      xt_perplexity_key: localStorage.getItem("xt_perplexity_key") || "",
+    };
+    // Save to both localStorage (immediate) and Firebase (durable across devices)
+    saveApiKeys(keys);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }
