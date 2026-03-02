@@ -13,11 +13,11 @@
    - HTTP status-aware retry (429/529/503/500)
    ═══════════════════════════════════════════════════════════ */
 
-import { ANTHROPIC_KEY, ANTHROPIC_HEADERS } from "./claudeApi";
+import { getAnthropicKey, getAnthropicHeaders } from "./claudeApi";
 
-const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
-const OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
-const PERPLEXITY_KEY = import.meta.env.VITE_PERPLEXITY_API_KEY || "";
+function getGeminiKey() { return localStorage.getItem("xt_gemini_key") || import.meta.env.VITE_GEMINI_API_KEY || ""; }
+function getOpenAIKey() { return localStorage.getItem("xt_openai_key") || import.meta.env.VITE_OPENAI_API_KEY || ""; }
+function getPerplexityKey() { return localStorage.getItem("xt_perplexity_key") || import.meta.env.VITE_PERPLEXITY_API_KEY || ""; }
 
 /* ───────────────────────────────────────────────
    RETRY ENGINE — Exponential backoff with jitter
@@ -129,14 +129,14 @@ Respond exactly as you would for any real user asking this question:
 const LLM_MAX_TOKENS = 1200; // Enough for a solid 350-450 word response (cost-optimized)
 
 async function askClaude(question, onRetry, timeoutMs = 90000) {
-  if (!ANTHROPIC_KEY) return { ok: false, error: "No API key" };
+  if (!getAnthropicKey()) return { ok: false, error: "No API key" };
   await throttle("claude");
   try {
     const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: ANTHROPIC_HEADERS,
+      headers: getAnthropicHeaders(),
       body: JSON.stringify({
-        model: "claude-3-5-haiku-20241022",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: LLM_MAX_TOKENS,
         system: DECISION_MAKER_SYSTEM,
         messages: [{ role: "user", content: question }],
@@ -152,11 +152,11 @@ async function askClaude(question, onRetry, timeoutMs = 90000) {
 }
 
 async function askGemini(question, onRetry, timeoutMs = 45000) {
-  if (!GEMINI_KEY) return { ok: false, error: "No API key" };
+  if (!getGeminiKey()) return { ok: false, error: "No API key" };
   await throttle("gemini");
   try {
     const res = await fetchWithRetry(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${getGeminiKey()}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -181,14 +181,14 @@ async function askGemini(question, onRetry, timeoutMs = 45000) {
 }
 
 async function askOpenAI(question, onRetry, timeoutMs = 60000) {
-  if (!OPENAI_KEY) return { ok: false, error: "No API key" };
+  if (!getOpenAIKey()) return { ok: false, error: "No API key" };
   await throttle("openai");
   try {
     const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_KEY}`,
+        "Authorization": `Bearer ${getOpenAIKey()}`,
       },
       body: JSON.stringify({
         model: "gpt-4o",
@@ -209,14 +209,14 @@ async function askOpenAI(question, onRetry, timeoutMs = 60000) {
 }
 
 async function askPerplexity(question, onRetry, timeoutMs = 45000) {
-  if (!PERPLEXITY_KEY) return { ok: false, error: "No API key" };
+  if (!getPerplexityKey()) return { ok: false, error: "No API key" };
   await throttle("perplexity");
   try {
     const res = await fetchWithRetry("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${PERPLEXITY_KEY}`,
+        "Authorization": `Bearer ${getPerplexityKey()}`,
       },
       body: JSON.stringify({
         model: "sonar",
@@ -253,7 +253,7 @@ export async function testConnections() {
   const results = {};
 
   // Claude
-  if (ANTHROPIC_KEY) {
+  if (getAnthropicKey()) {
     try {
       const r = await askClaude("Say hello in one word.");
       results.claude = r.ok ? "connected" : "error";
@@ -263,7 +263,7 @@ export async function testConnections() {
   }
 
   // Gemini
-  if (GEMINI_KEY) {
+  if (getGeminiKey()) {
     try {
       const r = await askGemini("Say hello in one word.");
       results.gemini = r.ok ? "connected" : "error";
@@ -273,7 +273,7 @@ export async function testConnections() {
   }
 
   // OpenAI
-  if (OPENAI_KEY) {
+  if (getOpenAIKey()) {
     try {
       const r = await askOpenAI("Say hello in one word.");
       results.openai = r.ok ? "connected" : "error";
@@ -283,7 +283,7 @@ export async function testConnections() {
   }
 
   // Perplexity
-  if (PERPLEXITY_KEY) {
+  if (getPerplexityKey()) {
     try {
       const r = await askPerplexity("Say hello in one word.");
       results.perplexity = r.ok ? "connected" : "error";
@@ -297,10 +297,10 @@ export async function testConnections() {
 
 export function getAvailableLLMs() {
   const available = [];
-  if (ANTHROPIC_KEY) available.push("claude");
-  if (GEMINI_KEY) available.push("gemini");
-  if (OPENAI_KEY) available.push("openai");
-  if (PERPLEXITY_KEY) available.push("perplexity");
+  if (getAnthropicKey()) available.push("claude");
+  if (getGeminiKey()) available.push("gemini");
+  if (getOpenAIKey()) available.push("openai");
+  if (getPerplexityKey()) available.push("perplexity");
   return available;
 }
 
@@ -353,7 +353,7 @@ Rules:
  * Uses Haiku for speed — structured JSON extraction doesn't need Sonnet.
  */
 async function analyzeBatch(question, responses, company, onRetry, timeoutMs = 45000) {
-  if (!ANTHROPIC_KEY) throw new Error("Claude API needed for analysis");
+  if (!getAnthropicKey()) throw new Error("Claude API needed for analysis");
 
   // Build combined prompt with all successful responses
   const responseSections = Object.entries(responses)
@@ -377,9 +377,9 @@ Each value must follow the analysis schema. Return JSON only.`;
     await throttle("claude");
     const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: ANTHROPIC_HEADERS,
+      headers: getAnthropicHeaders(),
       body: JSON.stringify({
-        model: "claude-3-5-haiku-20241022",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1800,
         system: ANALYSIS_SYSTEM + `\n\nIMPORTANT: You are analyzing MULTIPLE responses at once. Return a JSON object where each key is an LLM name (${llmKeys.join(", ")}) and each value is the full analysis object following the schema above. Example structure: {"claude": {...}, "gemini": {...}, "openai": {...}}`,
         messages: [{ role: "user", content: userMsg }],

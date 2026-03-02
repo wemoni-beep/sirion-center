@@ -507,13 +507,23 @@ function Dashboard({ t, onNavigate }) {
 
 /* ── Settings Page ── */
 function SettingsPage({ t }) {
-  const [apiKey, setApiKey] = useState(import.meta.env.VITE_ANTHROPIC_API_KEY ? "\u2022".repeat(20) : "");
-  const [firebaseProject, setFirebaseProject] = useState(import.meta.env.VITE_FIREBASE_PROJECT_ID || "");
+  const [anthropicKey, setAnthropicKey] = useState(() => localStorage.getItem("xt_anthropic_key") || "");
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("xt_gemini_key") || "");
+  const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem("xt_openai_key") || "");
+  const [saved, setSaved] = useState(false);
+
+  function saveKeys() {
+    anthropicKey ? localStorage.setItem("xt_anthropic_key", anthropicKey) : localStorage.removeItem("xt_anthropic_key");
+    geminiKey ? localStorage.setItem("xt_gemini_key", geminiKey) : localStorage.removeItem("xt_gemini_key");
+    openaiKey ? localStorage.setItem("xt_openai_key", openaiKey) : localStorage.removeItem("xt_openai_key");
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
 
   const inp = {
     background: t.inputBg, border: `1px solid ${t.inputBorder}`, borderRadius: 8,
     padding: "10px 14px", color: t.text, fontSize: 13, fontFamily: "var(--body)",
-    width: "100%", outline: "none",
+    width: "100%", outline: "none", boxSizing: "border-box",
   };
   const label = { fontSize: 11, fontWeight: 600, color: t.textSec, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8, display: "block" };
 
@@ -523,23 +533,35 @@ function SettingsPage({ t }) {
         <span style={{ fontSize: 11, fontWeight: 600, color: t.sectionNum, textTransform: "uppercase", letterSpacing: 2, fontFamily: "var(--mono)" }}>Configuration</span>
         <h2 style={{ margin: "8px 0 0", fontSize: 24, fontWeight: 800, color: t.text, letterSpacing: -0.5 }}>Global Settings</h2>
         <p style={{ margin: "8px 0 0", fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
-          Manage API keys, Firebase connection, and platform preferences.
+          Enter your API keys below. Keys are saved in your browser and never sent anywhere except the respective AI provider.
         </p>
       </div>
 
-      {/* API Configuration */}
+      {/* API Keys */}
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 24, marginBottom: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>API Configuration</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>API Keys</div>
         <div style={{ marginBottom: 16 }}>
-          <label style={label}>Anthropic API Key</label>
-          <input value={apiKey} readOnly style={{ ...inp, color: t.textDim }} />
-          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Configured via .env file (VITE_ANTHROPIC_API_KEY)</div>
+          <label style={label}>Anthropic API Key <span style={{ color: "#ef4444" }}>*required</span></label>
+          <input type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-..." style={inp} />
+          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Required for M1 question generation and M2 scan analysis</div>
         </div>
-        <div>
-          <label style={label}>Firebase Project ID</label>
-          <input value={firebaseProject} readOnly style={{ ...inp, color: t.textDim }} />
-          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Configured via .env file (VITE_FIREBASE_PROJECT_ID)</div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>Gemini API Key <span style={{ color: t.textDim }}>optional</span></label>
+          <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} placeholder="AIza..." style={inp} />
+          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Enables Gemini responses in M2 scans</div>
         </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={label}>OpenAI API Key <span style={{ color: t.textDim }}>optional</span></label>
+          <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} placeholder="sk-..." style={inp} />
+          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Enables ChatGPT responses in M2 scans</div>
+        </div>
+        <button onClick={saveKeys} style={{
+          background: saved ? "#22c55e" : t.brand, color: "#fff", border: "none", borderRadius: 8,
+          padding: "10px 24px", fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "background 0.2s",
+        }}>
+          {saved ? "Saved!" : "Save API Keys"}
+        </button>
+        {saved && <span style={{ marginLeft: 12, fontSize: 12, color: "#22c55e" }}>Keys saved — reload M2 for changes to take effect</span>}
       </div>
 
       {/* Company Configuration */}
