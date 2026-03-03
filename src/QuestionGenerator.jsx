@@ -2126,6 +2126,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
       personas: [...activePersonas],
       clusters: [...activeClusters],
       generatedAt: new Date().toISOString(),
+      // Phase 3: Generation tracking — downstream modules (M2, M3) use this to detect staleness
+      generationId: new Date().toISOString(),
       aiGenerated: sourceCounts.ai,
       kbLoaded: sourceCounts.kb,
       companyIntel: companyIntel,

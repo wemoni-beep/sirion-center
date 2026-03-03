@@ -1405,6 +1405,8 @@ export default function SirionDashboard({ user, onSignOut }) {
         latestStage: analysisResult.primary_stage || null,
         latestReadiness: analysisResult.readiness_score || 0,
         analyzedAt: new Date().toISOString(),
+        // Phase 3: Generation tracking
+        generationId: new Date().toISOString(),
       });
 
       // ═══ SAVE TO FIREBASE (background, but track status) ═══

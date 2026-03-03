@@ -1,10 +1,11 @@
-import { createContext, useContext, useReducer, useEffect, useRef, useCallback } from "react";
+import { createContext, useContext, useReducer, useEffect, useRef, useCallback, useMemo } from "react";
 import { db, loadApiKeys } from "./firebase.js";
+import { createPersistenceManager } from "./persistenceManager.js";
 
 const COLLECTION = "pipelines";
 
-// ── Data version: bump this after any seed/reset to clear stale localStorage ──
-const DATA_VERSION = "2026-03-03-v2";
+// ── Data version: bump this after any seed/reset to clear ALL stale caches ──
+const DATA_VERSION = "2026-03-03-v3";
 (function clearStaleCache() {
   try {
     if (typeof localStorage === "undefined") return;
@@ -12,7 +13,9 @@ const DATA_VERSION = "2026-03-03-v2";
       localStorage.removeItem("xt_pipeline_snapshot");
       localStorage.removeItem("m2_scanHistory");
       localStorage.setItem("xt_data_version", DATA_VERSION);
-      console.info("[Pipeline] Cleared stale localStorage cache (data version updated)");
+      // Phase 4: Also clear IndexedDB so M1 doesn't re-hydrate stale questions
+      try { indexedDB.deleteDatabase("xtrusio-m1"); } catch {}
+      console.info("[Pipeline] Cleared all caches — localStorage + IndexedDB (data version updated)");
     }
   } catch {}
 })();
@@ -22,11 +25,12 @@ const INITIAL_STATE = {
   _loaded: false,
   _saving: false,
   meta: { company: "Sirion", url: "https://sirion.ai", industry: "Contract Lifecycle Management" },
-  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [] },
-  m2: { scanResults: null, scores: null, contentGaps: [], personaBreakdown: [], stageBreakdown: [], recommendations: [], scannedAt: null },
-  m3: { prioritizedDomains: [], gapMatrix: null, outreachPlan: null, personaDomainMap: null, gapCount: 0, strongCount: 0, analyzedAt: null },
-  m4: { analyses: [], latestStage: null, latestReadiness: null, analyzedAt: null },
-  m5: { recommendations: [], leadData: null, generatedAt: null },
+  // Phase 3: generationId fields track data freshness across modules
+  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [], generationId: null },
+  m2: { scanResults: null, scores: null, contentGaps: [], personaBreakdown: [], stageBreakdown: [], recommendations: [], scannedAt: null, scanProgress: null, generationId: null, m1GenerationId: null },
+  m3: { prioritizedDomains: [], gapMatrix: null, outreachPlan: null, personaDomainMap: null, gapCount: 0, strongCount: 0, analyzedAt: null, generationId: null, m2GenerationId: null },
+  m4: { analyses: [], latestStage: null, latestReadiness: null, analyzedAt: null, generationId: null },
+  m5: { recommendations: [], leadData: null, generatedAt: null, generationId: null },
 };
 
 function reducer(state, action) {
@@ -55,24 +59,42 @@ const PipelineContext = createContext(null);
 
 export function PipelineProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
-  const saveTimerRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Load latest pipeline + API keys from Firebase on mount
+  // ── Persistence manager (batched saves to localStorage + Firebase) ──
+  const pmRef = useRef(null);
+  if (!pmRef.current) {
+    pmRef.current = createPersistenceManager(
+      () => stateRef.current,
+      () => stateRef.current._docId,
+      (newId) => dispatch({ type: "SET_DOC_ID", docId: newId })
+    );
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { if (pmRef.current) pmRef.current.destroy(); };
+  }, []);
+
+  // ── Load pipeline from Firebase (primary) or localStorage (fallback) ──
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        // Load API keys from Firebase → localStorage so LLM getters work immediately
+        // Load API keys in background
         loadApiKeys().catch(() => {});
+
+        // Phase 2: Firebase is the primary source. No file backup.
         const docs = await db.getAll(COLLECTION);
         if (cancelled) return;
+
         if (docs.length > 0) {
           const latest = docs[0];
           const docId = latest._id;
           delete latest._id;
-          // Merge loaded data with initial state structure to ensure all keys exist
+
+          // Merge with INITIAL_STATE to ensure all keys exist
           const merged = {};
           for (const key of Object.keys(INITIAL_STATE)) {
             if (key.startsWith("_")) continue;
@@ -82,29 +104,27 @@ export function PipelineProvider({ children }) {
               merged[key] = latest[key];
             }
           }
-          // Patch from localStorage snapshot: fill any null/empty module fields that the
-          // snapshot has — handles the case where Firebase PATCH succeeded for m1 but failed
-          // to persist m2/m4 updates (localStorage is always written before Firebase).
+
+          // Phase 2: Timestamp-based merge with localStorage (not blind patch)
+          // Only prefer localStorage if it has a NEWER timestamp than Firebase
           try {
             const snap = localStorage.getItem("xt_pipeline_snapshot");
             if (snap) {
               const parsed = JSON.parse(snap);
-              for (const key of ["m1", "m2", "m3", "m4", "m5"]) {
-                const fbVal = merged[key];
-                const localVal = parsed[key];
-                if (localVal && typeof localVal === "object") {
-                  // For each field in the module, if Firebase has null/empty but localStorage has data, prefer localStorage
-                  const patched = { ...fbVal };
-                  for (const [field, localField] of Object.entries(localVal)) {
-                    if ((patched[field] == null || patched[field] === "" || (Array.isArray(patched[field]) && patched[field].length === 0)) && localField != null && localField !== "" && !(Array.isArray(localField) && localField.length === 0)) {
-                      patched[field] = localField;
-                    }
+              const localTime = parsed._savedAt || 0;
+              const fbTime = latest.updated_at || "";
+              // Only use localStorage if it's clearly newer
+              if (localTime && fbTime && new Date(localTime) > new Date(fbTime)) {
+                console.info("[Pipeline] localStorage is newer than Firebase — using localStorage data");
+                for (const key of ["m1", "m2", "m3", "m4", "m5"]) {
+                  if (parsed[key] && typeof parsed[key] === "object") {
+                    merged[key] = { ...INITIAL_STATE[key], ...parsed[key] };
                   }
-                  merged[key] = patched;
                 }
               }
             }
-          } catch (e) { console.warn("[Pipeline] localStorage snapshot patch failed:", e.message); }
+          } catch (e) { console.warn("[Pipeline] localStorage merge check failed:", e.message); }
+
           dispatch({ type: "LOAD", payload: { ...merged, _docId: docId } });
         } else {
           // No Firebase docs — try localStorage snapshot
@@ -117,23 +137,11 @@ export function PipelineProvider({ children }) {
               return;
             }
           } catch {}
-          // Third fallback: file backup
-          try {
-            const res = await fetch("/__api/backup/pipeline_snapshot/current");
-            if (res.ok) {
-              const parsed = await res.json();
-              if (parsed && Object.keys(parsed).length > 0) {
-                dispatch({ type: "LOAD", payload: parsed });
-                console.info("[Pipeline] Restored from file backup (no Firebase docs, no localStorage)");
-                return;
-              }
-            }
-          } catch {}
           dispatch({ type: "SET_LOADED" });
         }
       } catch (e) {
         console.error("Pipeline load failed:", e);
-        // Fallback: localStorage -> file backup
+        // Fallback: localStorage only
         try {
           const snap = localStorage.getItem("xt_pipeline_snapshot");
           if (snap) {
@@ -143,88 +151,31 @@ export function PipelineProvider({ children }) {
             return;
           }
         } catch {}
-        try {
-          const res = await fetch("/__api/backup/pipeline_snapshot/current");
-          if (res.ok) {
-            const parsed = await res.json();
-            if (parsed && Object.keys(parsed).length > 0) {
-              dispatch({ type: "LOAD", payload: parsed });
-              console.info("[Pipeline] Restored from file backup (Firebase + localStorage failed)");
-              return;
-            }
-          }
-        } catch {}
         dispatch({ type: "SET_LOADED" });
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Debounced save — LOCAL-FIRST: always save to local_master.json via file backup.
-  // Firebase sync is deferred to the explicit "Push to Firebase" flow.
-  const scheduleSave = useCallback(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      const s = stateRef.current;
-      if (!s._loaded) return;
-      dispatch({ type: "SET_SAVING", value: true });
-      try {
-        const data = {};
-        for (const key of Object.keys(s)) {
-          if (key.startsWith("_")) continue;
-          data[key] = s[key];
-        }
-        data.updated_at = new Date().toISOString();
-        // Save to local file backup only (local_master.json)
-        await fetch("/__api/backup/pipelines/local_master", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        });
-      } catch (e) {
-        console.error("Pipeline save failed:", e);
-      }
-      dispatch({ type: "SET_SAVING", value: false });
-    }, 2000);
-  }, []);
-
+  // ── Update module data — single entry point for all modules ──
+  // Phase 1: No more synchronous localStorage write with stale stateRef.
+  // Instead, dispatch to React state, then let persistenceManager batch the save.
   const updateModule = useCallback((moduleId, data) => {
     dispatch({ type: "UPDATE_MODULE", moduleId, data });
-    // Immediate localStorage snapshot (sync, instant — survives tab close within debounce window)
-    try {
-      const s = stateRef.current;
-      const snap = {};
-      for (const key of Object.keys(s)) {
-        if (key.startsWith("_")) continue;
-        snap[key] = key === moduleId ? { ...s[key], ...data } : s[key];
-      }
-      localStorage.setItem("xt_pipeline_snapshot", JSON.stringify(snap));
-      // File backup (fire-and-forget)
-      fetch("/__api/backup/pipeline_snapshot/current", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(snap)
-      }).catch(() => {});
-    } catch {}
-    scheduleSave();
-  }, [scheduleSave]);
+    // Let the persistence manager handle localStorage + Firebase batching.
+    // It reads stateRef.current at flush time (after React has processed all dispatches).
+    // Use queueMicrotask so the stateRef is updated before the localStorage write.
+    queueMicrotask(() => {
+      if (pmRef.current) pmRef.current.enqueueSave();
+    });
+  }, []);
 
   const updateMeta = useCallback((data) => {
     dispatch({ type: "UPDATE_META", data });
-    try {
-      const s = stateRef.current;
-      const snap = {};
-      for (const key of Object.keys(s)) {
-        if (key.startsWith("_")) continue;
-        snap[key] = key === "meta" ? { ...s.meta, ...data } : s[key];
-      }
-      localStorage.setItem("xt_pipeline_snapshot", JSON.stringify(snap));
-      fetch("/__api/backup/pipeline_snapshot/current", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(snap)
-      }).catch(() => {});
-    } catch {}
-    scheduleSave();
-  }, [scheduleSave]);
+    queueMicrotask(() => {
+      if (pmRef.current) pmRef.current.enqueueSave();
+    });
+  }, []);
 
   // Pipeline status helper
   const getStatus = useCallback(() => {
@@ -238,8 +189,26 @@ export function PipelineProvider({ children }) {
     };
   }, []);
 
+  // Phase 3: Staleness detection helper
+  const getStaleness = useCallback(() => {
+    const s = stateRef.current;
+    return {
+      m2: s.m2.m1GenerationId && s.m2.m1GenerationId !== s.m1.generationId,
+      m3: s.m3.m2GenerationId && s.m3.m2GenerationId !== s.m2.generationId,
+    };
+  }, []);
+
+  // Expose persistence status for UI save indicators
+  const getSaveStatus = useCallback(() => {
+    return pmRef.current ? pmRef.current.getStatus() : { saving: false, lastSavedAt: null, error: null };
+  }, []);
+
+  const value = useMemo(() => ({
+    pipeline: state, updateModule, updateMeta, getStatus, getStaleness, getSaveStatus
+  }), [state, updateModule, updateMeta, getStatus, getStaleness, getSaveStatus]);
+
   return (
-    <PipelineContext.Provider value={{ pipeline: state, updateModule, updateMeta, getStatus }}>
+    <PipelineContext.Provider value={value}>
       {children}
     </PipelineContext.Provider>
   );

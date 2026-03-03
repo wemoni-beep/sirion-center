@@ -741,6 +741,12 @@ export default function App() {
       db.saveWithId("m2_scan_meta", scanId, {
         ...scanMeta, completedQueries: actualCompleted, status: "running",
       }).catch(() => {});
+      // Phase 2: Push scan progress to Pipeline so Dashboard shows real-time updates
+      if ((index + 1) % 5 === 0 || index + 1 === total) {
+        updateModule("m2", {
+          scanProgress: { completed: actualCompleted, total, scanId },
+        });
+      }
     };
 
     try {
@@ -830,6 +836,10 @@ export default function App() {
         stageBreakdown: payload.stageBreakdown,
         recommendations: payload.allRecommendations,
         exportPayload: payload,
+        scanProgress: null, // Clear progress indicator — scan is done
+        // Phase 3: Scan versioning — track which M1 generation this scan used
+        generationId: new Date().toISOString(),
+        m1GenerationId: pipeline.m1.generationId || null,
       });
 
       // 7. Show save warnings if any
@@ -904,7 +914,7 @@ export default function App() {
 
       setScanData(updatedScanData);
       setScanHistory(prev => prev.map(s => s.id === scanData.id ? updatedScanData : s));
-      updateModule("m2", { scanResults: updatedScanData, scores: updatedScores, scannedAt: updatedScanData.date });
+      updateModule("m2", { scanResults: updatedScanData, scores: updatedScores, scannedAt: updatedScanData.date, generationId: new Date().toISOString() });
 
       // Save stripped rescan result + updated scan to Firebase
       const strippedResult = stripForFirebase(newResult);

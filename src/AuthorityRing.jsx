@@ -454,19 +454,12 @@ export default function AuthorityRing() {
       strongCount: stats.strong,
       analyzedAt: new Date().toISOString(),
     };
+    // Phase 3: Add generation tracking so Dashboard can detect staleness
+    m3Data.generationId = new Date().toISOString();
+    m3Data.m2GenerationId = pipeline.m2.generationId || null;
     updateModule("m3", m3Data);
-
-    // Hard save M3 state to Firebase (fire-and-forget)
-    db.saveWithId("m3_authority_ring", "latest", {
-      ...m3Data,
-      allDomains: enhancedDomains.map(d => ({
-        id: d.id, domain: d.domain, da: d.da, status: d.sirionStatus,
-        priority: d.enhancedPriority || d.priorityScore,
-        aiCitations: d.aiCitations || 0,
-        category: d.category,
-      })),
-      savedAt: new Date().toISOString(),
-    }).catch(e => console.warn("[M3] Firebase save failed:", e));
+    // Phase 2: Removed separate db.saveWithId("m3_authority_ring") — PipelineContext
+    // now saves M3 data to Firebase as part of the pipeline document via persistenceManager.
   }, [perceptionData, enhancedDomains, aiCitedDomains]);
 
   const tipStyle = { background: T.card, border: `1px solid ${T.borderActive}`, borderRadius: 8, fontSize: 11, fontFamily: T.b, color: T.text, padding: "8px 12px", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" };
