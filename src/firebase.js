@@ -4,13 +4,17 @@
 
 // Firebase web API keys are public by design (security = Firestore rules).
 // Read from Cloudflare Pages env vars (injected at build time via VITE_ prefix),
-// with hardcoded fallback for safety.
+// Firebase is DISABLED — all data comes from local file store.
+// To re-enable: set VITE_FIREBASE_API_KEY and VITE_FIREBASE_PROJECT_ID in .env
 export const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCbZIwkEHKy8r3HSxmLNFau6lnD-VeG_Q8",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-persona-stage"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || ""
 };
 
-export const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+// Empty projectId = all Firebase calls fail instantly → local file fallback kicks in
+export const FS_BASE = FIREBASE_CONFIG.projectId
+  ? `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`
+  : "";
 
 // Convert JS value → Firestore value (flatten deeply nested objects to JSON strings to avoid depth limits)
 export function toFsVal(val, depth = 0) {
