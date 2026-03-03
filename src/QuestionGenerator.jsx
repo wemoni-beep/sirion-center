@@ -783,7 +783,9 @@ export default function QuestionGenerator({ onNavigate }) {
   // ── Decision Matrix state ──
   const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
   const [decisionScores, setDecisionScores] = useState(() => {
-    try { const s = localStorage.getItem("xt_decision_scores"); return s ? JSON.parse(s) : {}; } catch { return {}; }
+    // Priority: localStorage first (fast), then pipeline fallback (survives cross-domain deploy)
+    try { const s = localStorage.getItem("xt_decision_scores"); if (s) return JSON.parse(s); } catch {}
+    return {};
   }); // key: "gc.criterion_id" → score 1-10
   const [expandedCriterion, setExpandedCriterion] = useState(null); // key of expanded row
   const [autoGrading, setAutoGrading] = useState(false);
@@ -868,22 +870,34 @@ export default function QuestionGenerator({ onNavigate }) {
       } catch {}
       let loadedPersonas = []; // shared with hydration block below
       try {
-        // Primary: file store (survives code changes + Vite rebuilds)
+        // Primary: Firebase / file store (survives code changes + Vite rebuilds)
         const filePersonas = await db.getAll("m1_personas");
-        if (filePersonas.length > 0) {
-          loadedPersonas = filePersonas;
-          setPersonaProfiles(filePersonas);
-          savePersonas(filePersonas).catch(() => {}); // sync to IndexedDB as secondary
+        // Only accept personas that have a name field (skip generic types like {id:"cio",label:"..."})
+        const realPersonas = filePersonas.filter(p => p.name && p.name.length > 0);
+        if (realPersonas.length > 0) {
+          loadedPersonas = realPersonas;
+          setPersonaProfiles(realPersonas);
+          console.info(`[Personas] Loaded ${realPersonas.length} from Firebase/file store`);
+          savePersonas(realPersonas).catch(() => {}); // sync to IndexedDB as secondary
+          // Refresh kbStats after saving to IndexedDB
+          setTimeout(async () => {
+            try { setKbStats(await getKnowledgeBaseStats()); } catch {}
+          }, 500);
         } else {
           // Fallback: IndexedDB (in case file store is empty)
           const idbPersonas = await getAllPersonas();
-          loadedPersonas = idbPersonas;
-          setPersonaProfiles(idbPersonas);
-          if (idbPersonas.length > 0) {
-            idbPersonas.forEach(p => db.saveWithId("m1_personas", p.id, p).catch(() => {}));
+          const realIdb = idbPersonas.filter(p => p.name && p.name.length > 0);
+          if (realIdb.length > 0) {
+            loadedPersonas = realIdb;
+            setPersonaProfiles(realIdb);
+            console.info(`[Personas] Loaded ${realIdb.length} from IndexedDB`);
+            realIdb.forEach(p => db.saveWithId("m1_personas", p.id, p).catch(() => {}));
           }
+          // If both sources are empty, do NOT clear personaProfiles — let pipeline restore handle it
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[Personas] Load failed:", e.message);
+      }
 
       // 2. Hydrate from file store in background (restores data after cache clear)
       try {
@@ -933,11 +947,9 @@ export default function QuestionGenerator({ onNavigate }) {
         if (fbIntel.length > 0) {
           await hydrateCompanyIntel(fbIntel);
         }
-        // Refresh stats if Firebase had data we didn't have locally
-        if (changed) {
-          const refreshed = await getKnowledgeBaseStats();
-          setKbStats(refreshed);
-        }
+        // Always refresh stats after hydration (personas may have been saved to IndexedDB)
+        const refreshed = await getKnowledgeBaseStats();
+        setKbStats(refreshed);
       } catch (e) {
         console.warn("Firebase hydration skipped:", e.message);
       }
@@ -967,6 +979,53 @@ export default function QuestionGenerator({ onNavigate }) {
       });
     }
   }, [personaProfiles]);
+
+  // ── Restore decision scores from pipeline when localStorage is empty (cross-domain deploy) ──
+  useEffect(() => {
+    if (!pipeline._loaded) return;
+    const pScores = pipeline.m1?.decisionScores;
+    if (pScores && Object.keys(pScores).length > 0) {
+      setDecisionScores(prev => {
+        if (Object.keys(prev).length > 0) return prev; // local already has data
+        try { localStorage.setItem("xt_decision_scores", JSON.stringify(pScores)); } catch {}
+        return pScores;
+      });
+    }
+  }, [pipeline._loaded]); // eslint-disable-line
+
+  // ── Restore persona profiles from pipeline when Firebase + IndexedDB are both empty ──
+  useEffect(() => {
+    if (!pipeline._loaded) return;
+    if (personaProfiles.length > 0) return; // already loaded
+    const pProfiles = pipeline.m1?.personaProfiles;
+    if (pProfiles && pProfiles.length > 0) {
+      // Only restore real profiles (have name field), not generic types like {id:"cio",label:"..."}
+      const realProfiles = pProfiles.filter(p => p.name && p.name.length > 0);
+      if (realProfiles.length > 0) {
+        setPersonaProfiles(realProfiles);
+        console.info(`[Personas] Restored ${realProfiles.length} from pipeline`);
+        // Also write back to IndexedDB + Firebase so future loads are instant
+        savePersonas(realProfiles).catch(() => {});
+        realProfiles.forEach(p => db.saveWithId("m1_personas", p.id, p).catch(() => {}));
+        // Refresh kbStats after saving
+        setTimeout(async () => {
+          try { setKbStats(await getKnowledgeBaseStats()); } catch {}
+        }, 500);
+      }
+    }
+  }, [pipeline._loaded, personaProfiles.length]); // eslint-disable-line
+
+  // ── Debounced sync: decision scores → pipeline (covers manual input) ──
+  const scoreTimerRef = useRef(null);
+  useEffect(() => {
+    if (!pipeline._loaded) return;
+    if (Object.keys(decisionScores).length === 0) return;
+    if (scoreTimerRef.current) clearTimeout(scoreTimerRef.current);
+    scoreTimerRef.current = setTimeout(() => {
+      updateModule("m1", { decisionScores });
+    }, 2000); // 2s debounce for manual typing
+    return () => { if (scoreTimerRef.current) clearTimeout(scoreTimerRef.current); };
+  }, [decisionScores]); // eslint-disable-line
 
   // ── Merged questions (static + KB + AI + pipeline) with deduplication ──
   // Pipeline questions (from Firebase) are the source of truth for the full count.
@@ -2131,6 +2190,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
       aiGenerated: sourceCounts.ai,
       kbLoaded: sourceCounts.kb,
       companyIntel: companyIntel,
+      // Decision scores — persist to pipeline so they survive cross-domain deploy
+      decisionScores: decisionScores,
       personaProfiles: personaProfiles.map(p => ({
         id: p.id, name: p.name, title: p.title, company: p.company,
         companyUrl: p.companyUrl, personaType: p.personaType,
@@ -2364,6 +2425,8 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
 
       setDecisionScores(newScores);
       try { localStorage.setItem("xt_decision_scores", JSON.stringify(newScores)); } catch {}
+      // Persist to pipeline so scores survive cross-domain deploy
+      updateModule("m1", { decisionScores: newScores });
       setAutoGradeSource({ scoredAt: new Date().toLocaleTimeString(), count: scoredCount });
     } catch (e) {
       console.warn("[AutoGrade] failed:", e.message);
