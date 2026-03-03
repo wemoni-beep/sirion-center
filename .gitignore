@@ -26,7 +26,6 @@ data/analyses/
 
 .env
 .env.*
-dist
 dist-ssr
 *.local
 
