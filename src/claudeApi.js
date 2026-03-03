@@ -3,14 +3,20 @@
    Xtrusio Growth Engine · Single source of truth for AI calls
    ═══════════════════════════════════════════════════════════ */
 
-export const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
+/** Read Anthropic key: localStorage first (entered in Settings), then env var. */
+export function getAnthropicKey() {
+  return localStorage.getItem("xt_anthropic_key") || import.meta.env.VITE_ANTHROPIC_API_KEY || "";
+}
 
-export const ANTHROPIC_HEADERS = {
-  "Content-Type": "application/json",
-  "x-api-key": ANTHROPIC_KEY,
-  "anthropic-version": "2023-06-01",
-  "anthropic-dangerous-direct-browser-access": "true",
-};
+/** Build headers dynamically so they always use the current key. */
+export function getAnthropicHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": getAnthropicKey(),
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+  };
+}
 
 /**
  * Fast Claude call — NO web search, lower tokens, for preprocessing.
@@ -18,10 +24,11 @@ export const ANTHROPIC_HEADERS = {
  * Cost: ~$0.01 per call.
  */
 export async function callClaudeFast(systemPrompt, userMessage, maxTokens = 1500) {
-  if (!ANTHROPIC_KEY) throw new Error("Anthropic API key not configured. Add VITE_ANTHROPIC_API_KEY to .env");
+  const key = getAnthropicKey();
+  if (!key) throw new Error("Anthropic API key not configured. Enter it in Settings or add VITE_ANTHROPIC_API_KEY to .env");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: ANTHROPIC_HEADERS,
+    headers: getAnthropicHeaders(),
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: maxTokens,
@@ -46,13 +53,14 @@ export async function callClaudeFast(systemPrompt, userMessage, maxTokens = 1500
  * Cost: ~$0.08 per call.
  */
 export async function callClaude(systemPrompt, userMessage, timeoutMs = 120000) {
-  if (!ANTHROPIC_KEY) throw new Error("Anthropic API key not configured. Add VITE_ANTHROPIC_API_KEY to .env");
+  const key = getAnthropicKey();
+  if (!key) throw new Error("Anthropic API key not configured. Enter it in Settings or add VITE_ANTHROPIC_API_KEY to .env");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: ANTHROPIC_HEADERS,
+      headers: getAnthropicHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",

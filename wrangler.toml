@@ -1,2 +1,5 @@
 name = "sirion-center"
 pages_build_output_dir = "./dist"
+# Preserve environment variables set in Cloudflare Pages dashboard
+# Without this, wrangler.toml can override dashboard-set variables on deploy
+keep_vars = true
