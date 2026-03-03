@@ -11,10 +11,16 @@ export const FIREBASE_CONFIG = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || ""
 };
 
-// Empty projectId = all Firebase calls fail instantly → local file fallback kicks in
+// Empty projectId = all Firebase calls fail instantly → localStorage fallback kicks in
 export const FS_BASE = FIREBASE_CONFIG.projectId
   ? `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`
   : "";
+
+// Phase 5: Production guard — warn if Firebase is not configured
+export const FIREBASE_ENABLED = !!FS_BASE;
+if (!FIREBASE_ENABLED) {
+  console.warn("[Firebase] No project ID configured. Data will only persist in localStorage (lost on browser clear). Set VITE_FIREBASE_PROJECT_ID in .env for durable persistence.");
+}
 
 // Convert JS value → Firestore value (flatten deeply nested objects to JSON strings to avoid depth limits)
 export function toFsVal(val, depth = 0) {
@@ -133,26 +139,14 @@ const localCache = {
 };
 
 /* ═══════════════════════════════════════════
-   FILE BACKUP — JSON files in project data/ folder
-   Fire-and-forget writes via Vite dev server middleware.
+   FILE BACKUP — REMOVED (was dev-only Vite middleware)
+   The /__api/backup/ endpoint does not exist on static hosting.
+   All persistence now flows through Firebase + localStorage.
    ═══════════════════════════════════════════ */
 const fileBackup = {
-  save(collection, docId, data) {
-    fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data)
-    }).catch(() => {});
-  },
-  remove(collection, docId) {
-    fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, { method: "DELETE" }).catch(() => {});
-  },
-  async getAll(collection) {
-    try {
-      const res = await fetch(`/__api/backup/${encodeURIComponent(collection)}`);
-      if (res.ok) return await res.json();
-    } catch {}
-    return [];
-  }
+  save() {},
+  remove() {},
+  async getAll() { return []; }
 };
 
 // Firestore DB operations with full error visibility
@@ -223,19 +217,10 @@ export const db = {
     }
   },
 
-  // Simple list — LOCAL-FIRST: read from file backup, then Firebase as fallback.
-  // This prevents stale Firebase data from overwriting clean local files.
+  // Firebase-first: read from Firebase, fall back to localStorage cache.
   async getAll(collection) {
     _lastDbError = null;
-    // 1. Try local file backup first (always authoritative in dev)
-    try {
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) {
-        console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (local-first)`);
-        return fileDocs;
-      }
-    } catch {}
-    // 2. Try Firebase as fallback
+    // 1. Try Firebase as primary source
     try {
       const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=50`;
       const res = await fetch(url);
@@ -309,18 +294,10 @@ export const db = {
     }
   },
 
-  // Fetch all documents with pagination — LOCAL-FIRST
+  // Fetch all documents with pagination — Firebase-first
   async getAllPaginated(collection, maxPages = 20) {
     _lastDbError = null;
-    // 1. Try local file backup first
-    try {
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) {
-        console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (local-first, paginated)`);
-        return fileDocs;
-      }
-    } catch {}
-    // 2. Fallback to Firebase with pagination
+    // 1. Try Firebase with pagination
     try {
       let all = [];
       let pageToken = null;
