@@ -151,11 +151,72 @@ npx vite --port 5200          # Dev server (or use preview_start "xtrusio-dev")
 
 # Build (MUST pass before any PR/deploy)
 npx vite build                # Output: dist/
-
-# Deploy (Cloudflare Pages)
-# Push to git repo linked to Cloudflare Pages, or:
-npx wrangler pages deploy dist/
 ```
+
+---
+
+## Deployment Checklist (Cloudflare Workers)
+
+**CRITICAL: Follow this EVERY time after making code changes.**
+
+```bash
+# Step 1: Build locally
+npx vite build
+
+# Step 2: Stage the updated dist + any source changes
+git add dist/ src/ [any other changed files]
+
+# Step 3: Commit
+git commit -m "Description of what changed"
+
+# Step 4: Push to GitHub (triggers Cloudflare auto-deploy)
+git push origin main
+```
+
+**Cloudflare will auto-deploy from the committed `dist/` folder. No build step runs on Cloudflare.**
+
+### Cloudflare Settings (DO NOT CHANGE)
+- **Build command**: EMPTY (no build on Cloudflare -- we commit pre-built dist/)
+- **Deploy command**: `npx wrangler deploy`
+- **Root directory**: `/`
+- **Output dir**: `dist` (set in wrangler.toml)
+- **Firebase env vars**: `VITE_FIREBASE_API_KEY` + `VITE_FIREBASE_PROJECT_ID` (set as secrets)
+- **Project uses npm, NOT pnpm** -- never set build command to `pnpm run build`
+
+### Deployment Pitfalls
+1. If `dist/` is in `.gitignore`, JS bundles won't reach Cloudflare -- site loads blank
+2. If Cloudflare build command is set to `pnpm run build`, it fails silently and serves stale code
+3. Always verify deployment by checking the live URL in incognito (avoids browser cache)
+4. If something looks wrong on deployed site, run `curl -s <URL> | head -15` to check the HTML references the correct JS hash
+
+### Live URLs
+- **Production**: https://sirion-center.wemoni.workers.dev
+- **Cloudflare Dashboard**: dash.cloudflare.com > Workers & Pages > sirion-center
+
+---
+
+## Pending Features
+
+### Dashboard Fixes (Approved, Not Started)
+1. **M2 data not showing on dashboard** - M2 has scan data but dashboard widgets (AI Visibility by LLM) show empty. Investigate why pipeline.m2 isn't being read.
+2. **CLM Lifecycle Coverage** - Shows 0/0/0. Find where this data comes from and fix it.
+3. **Domain Priority Distribution** - Chart is empty/broken. Fix data source.
+4. **Remove useless sections** - "Command Center" header and Growth Pipeline funnel are wasting space. User wants actionable data, not decoration.
+
+### AI Chat / Strategy Advisor (Approved, Not Started)
+An AI chat panel that reads existing pipeline data (M1 questions, M2 scan results, M3 authority gaps, M4 buyer stages) and:
+- Identifies gap areas automatically (e.g. "Sirion has zero presence on 14 authority domains")
+- Suggests actionable next steps (e.g. "Publish content on G2, TrustRadius to close authority gaps")
+- Answers questions about the data (e.g. "Which persona has the weakest coverage?")
+- Uses Claude API (already in claudeApi.js) with pipeline data as context
+- Could be a slide-out panel or a dedicated page
+
+### URL Routing (Approved, Not Started)
+Add browser URL routing so each module has its own URL. Refresh stays on the same page, back/forward works, links are shareable.
+- `/` = Dashboard, `/m1` = Question Generator, `/m1/matrix` `/m1/research` for tabs
+- `/m2` = Perception Monitor, `/m3` = Authority Ring, `/m4` = Buying Stage Guide, `/m5` = CLM Advisor, `/settings` = Settings
+- Sync `activePage` state with `window.location` using History API (no react-router needed)
+- Low complexity, ~15-20 min
 
 ---
 
@@ -166,4 +227,4 @@ npx wrangler pages deploy dist/
 - Dark mode is primary, but light mode must also work.
 - Content should center-align: `maxWidth: 1200, margin: "0 auto"`.
 - He gets frustrated by the fix-test-break cycle. Always verify end-to-end before saying "done".
-- He deploys to Cloudflare Pages and expects the deployed version to work identically to local.
+- He deploys to Cloudflare Workers and expects the deployed version to work identically to local.

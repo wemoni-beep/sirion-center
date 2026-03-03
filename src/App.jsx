@@ -35,7 +35,7 @@ const useIsMobile = () => {
   return m;
 };
 
-/* ── Dashboard — Sirion Growth Command Center ── */
+/* ── Dashboard — Sirion Growth Intelligence ── */
 function Dashboard({ t, onNavigate }) {
   const { getStatus, getStaleness, pipeline: ps } = usePipeline();
   const status = getStatus();
@@ -50,106 +50,89 @@ function Dashboard({ t, onNavigate }) {
   const m2 = status.m2 || {};
   const m3 = status.m3 || {};
   const m4 = status.m4 || {};
-  const m5 = status.m5 || {};
 
   // M2 scan progress (real-time during active scans)
   const scanProgress = ps?.m2?.scanProgress;
 
+  // Personas
   const m1Personas = ps?.m1?.personaProfiles || [];
   const researchedPersonas = m1Personas.filter(p => p.researchSummary);
   const unresearchedPersonas = m1Personas.filter(p => !p.researchSummary);
 
-  // M2 scan data
+  // M2 scores
   const scanScores = ps?.m2?.scores || null;
   const mentionRate = scanScores?.mention || 0;
   const overallScore = scanScores?.overall || 0;
+  const shareOfVoice = scanScores?.shareOfVoice || 0;
+  const scannedAt = ps?.m2?.scannedAt;
 
-  // CLM lifecycle breakdown from scan results
+  // M2 compact scan results
   const scanResultsRaw = ps?.m2?.scanResults?.results;
   const scanResultsArr = Array.isArray(scanResultsRaw) ? scanResultsRaw : [];
+  const scanLlms = ps?.m2?.scanResults?.llms || [];
+
+  // Per-LLM mention rates (horizontal bars)
+  const llmData = useMemo(() => {
+    if (!scanResultsArr.length || !scanLlms.length) return [];
+    const llmNames = { claude: "Claude", gemini: "Gemini", chatgpt: "ChatGPT", "gpt-4o": "ChatGPT", openai: "ChatGPT" };
+    return scanLlms.map(lid => {
+      let mentioned = 0;
+      scanResultsArr.forEach(r => {
+        if (r.mentions) { if (r.mentions[lid]) mentioned++; }
+        else { const a = r.analyses?.[lid]; if (a && !a._error && a.mentioned) mentioned++; }
+      });
+      const rate = scanResultsArr.length ? Math.round((mentioned / scanResultsArr.length) * 100) : 0;
+      return { id: lid, name: llmNames[lid] || lid, mentioned, total: scanResultsArr.length, rate };
+    });
+  }, [scanResultsArr.length, scanLlms.length]);
+
+  // CLM lifecycle breakdown
   const clmCounts = { "pre-signature": 0, "post-signature": 0, "full-stack": 0 };
   scanResultsArr.forEach(r => { const lc = r.lifecycle || "full-stack"; if (clmCounts[lc] !== undefined) clmCounts[lc]++; });
-
-  // M3 Authority Ring domain stats for charts
-  const m3Domains = ps?.m3?.domains;
-  const m3DomainsArr = Array.isArray(m3Domains) ? m3Domains : (m3Domains && typeof m3Domains === "object" ? Object.values(m3Domains) : []);
-
-  // Authority domain status breakdown for pie chart
-  const domainStatusData = useMemo(() => {
-    if (!m3DomainsArr.length) return [
-      { name: "Zero Presence", value: 14, color: "#ef4444" },
-      { name: "Present/Wrong", value: 8, color: "#fbbf24" },
-      { name: "Strong", value: 5, color: "#22c55e" },
-    ];
-    const z = m3DomainsArr.filter(d => d.sirionStatus === "verified_zero").length;
-    const s = m3DomainsArr.filter(d => d.sirionStatus === "strong_presence").length;
-    const p = m3DomainsArr.length - z - s;
-    return [
-      { name: "Zero Presence", value: z, color: "#ef4444" },
-      { name: "Present/Wrong", value: p, color: "#fbbf24" },
-      { name: "Strong", value: s, color: "#22c55e" },
-    ];
-  }, [m3DomainsArr.length]);
-
-  // Per-LLM mention rates for radar chart
-  const llmRadarData = useMemo(() => {
-    if (!scanResultsArr.length) return [
-      { llm: "Claude", rate: 0 }, { llm: "Gemini", rate: 0 }, { llm: "ChatGPT", rate: 0 },
-    ];
-    const llms = ps?.m2?.scanResults?.llms || ["claude", "gemini", "chatgpt"];
-    const llmNames = { claude: "Claude", gemini: "Gemini", chatgpt: "ChatGPT", "gpt-4o": "ChatGPT" };
-    return llms.map(lid => {
-      let mentioned = 0, total = 0;
-      scanResultsArr.forEach(r => {
-        // Support compact format (r.mentions) and legacy format (r.analyses)
-        if (r.mentions) {
-          total++;
-          if (r.mentions[lid]) mentioned++;
-        } else {
-          const a = r.analyses?.[lid];
-          if (a && !a._error) { total++; if (a.mentioned) mentioned++; }
-        }
-      });
-      return { llm: llmNames[lid] || lid, rate: total ? Math.round((mentioned / total) * 100) : 0 };
-    });
-  }, [scanResultsArr.length]);
-
-  // CLM lifecycle chart data
-  const clmChartData = useMemo(() => [
-    { name: "Pre-Signature", count: clmCounts["pre-signature"], color: "#3b82f6" },
-    { name: "Post-Signature", count: clmCounts["post-signature"], color: "#10b981" },
-    { name: "Full-Stack", count: clmCounts["full-stack"], color: "#a78bfa" },
-  ], [clmCounts]);
-
-  // Domain priority distribution for bar chart
-  const domainPriorityData = useMemo(() => {
-    const buckets = [
-      { range: "90-100", min: 90, max: 101, color: "#ef4444" },
-      { range: "80-89", min: 80, max: 90, color: "#f97316" },
-      { range: "70-79", min: 70, max: 80, color: "#fbbf24" },
-      { range: "60-69", min: 60, max: 70, color: "#22c55e" },
-      { range: "<60", min: 0, max: 60, color: "#6b7280" },
-    ];
-    const src = m3DomainsArr.length ? m3DomainsArr : [];
-    return buckets.map(b => ({
-      range: b.range, count: src.filter(d => (d.priorityScore || 0) >= b.min && (d.priorityScore || 0) < b.max).length, color: b.color,
-    }));
-  }, [m3DomainsArr.length]);
-
-  // Tooltip style
-  const tipStyle = { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontFamily: "var(--mono)" };
-
-  // Pipeline flow scoring
-  const pipelineStages = [
-    { label: "Questions", done: m1.hasData, count: m1.count || 0, action: "m1", color: t.brand },
-    { label: "AI Scans", done: m2.hasData, count: m2.count || 0, action: "m2", color: t.client },
-    { label: "Authority", done: m3.hasData, count: m3.count || 0, action: "m3", color: "#fbbf24" },
-    { label: "Buyers", done: m4.hasData, count: m4.count || 0, action: "m4", color: "#4ade80" },
-    { label: "Advisor", done: m5.hasData, count: m5.count || 0, action: "m5", color: "#fb923c" },
+  const totalQueries = scanResultsArr.length;
+  const clmData = [
+    { name: "Pre-Signature", count: clmCounts["pre-signature"], color: "#3b82f6", desc: "Authoring, templates, redlining" },
+    { name: "Post-Signature", count: clmCounts["post-signature"], color: "#10b981", desc: "Obligations, compliance, renewals" },
+    { name: "Full-Stack", count: clmCounts["full-stack"], color: "#a78bfa", desc: "End-to-end platform, analytics" },
   ];
-  const completedStages = pipelineStages.filter(s => s.done).length;
 
-  // Build prioritized actions
+  // M3 Authority Ring — FIXED: was reading ps.m3.domains (wrong), now reads ps.m3.prioritizedDomains
+  const m3DomainsArr = Array.isArray(ps?.m3?.prioritizedDomains) ? ps.m3.prioritizedDomains : [];
+  const gapCount = ps?.m3?.gapCount || 0;
+  const strongCount = ps?.m3?.strongCount || 0;
+  const presentCount = ps?.m3?.presentCount || 0;
+  const totalDomains = ps?.m3?.totalDomains || (gapCount + strongCount + presentCount) || 0;
+  const topGapDomains = useMemo(() =>
+    [...m3DomainsArr].sort((a, b) => (b.da || 0) - (a.da || 0)).slice(0, 3),
+    [m3DomainsArr.length]
+  );
+  const authorityData = useMemo(() => {
+    if (!totalDomains) return [];
+    return [
+      { name: "Zero Presence", value: gapCount, color: "#ef4444" },
+      { name: "Present", value: presentCount, color: "#fbbf24" },
+      { name: "Strong", value: strongCount, color: "#22c55e" },
+    ];
+  }, [gapCount, presentCount, strongCount, totalDomains]);
+
+  // Competitor data — try competitorSummary (new), fall back to exportPayload
+  const competitorData = useMemo(() => {
+    if (ps?.m2?.competitorSummary?.length) return ps.m2.competitorSummary;
+    const queries = ps?.m2?.exportPayload?.queries;
+    if (!Array.isArray(queries) || !queries.length) return [];
+    const agg = {};
+    queries.forEach(q => {
+      (q.topCompetitors || []).forEach(c => {
+        if (!agg[c.name]) agg[c.name] = { name: c.name, mentions: 0, top3: 0, positive: 0 };
+        agg[c.name].mentions++;
+        if (c.position <= 3) agg[c.name].top3++;
+        if (c.sentiment === "positive") agg[c.name].positive++;
+      });
+    });
+    return Object.values(agg).sort((a, b) => b.mentions - a.mentions).slice(0, 8);
+  }, [ps?.m2?.competitorSummary, ps?.m2?.exportPayload]);
+
+  // Prioritized actions
   const actions = [];
   if (!m1.hasData) actions.push({ priority: 1, text: "Generate buyer-intent questions to fuel the entire growth engine", mod: "M1", action: "m1", icon: "1" });
   else if (!m2.hasData) actions.push({ priority: 1, text: "Run your first AI perception scan across Claude, Gemini, ChatGPT", mod: "M2", action: "m2", icon: "1" });
@@ -159,108 +142,106 @@ function Dashboard({ t, onNavigate }) {
   if (!m3.hasData) actions.push({ priority: actions.length + 1, text: "Review authority domain gaps — identify where competitors outrank Sirion", mod: "M3", action: "m3", icon: String(actions.length + 1) });
   if (actions.length === 0) actions.push({ priority: 1, text: "All systems operational — run a fresh scan to track perception changes", mod: "M2", action: "m2", icon: "1" });
 
-  // Card style helper
+  // Helpers
   const card = (extra = {}) => ({
     background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, ...extra,
   });
+  const scoreColor = (val, low, mid) => val >= mid ? "#22c55e" : val >= low ? "#f59e0b" : "#ef4444";
+  const emptyState = (msg, mod, color) => (
+    <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>{msg}</div>
+      <button onClick={() => onNavigate(mod)} style={{ padding: "5px 14px", borderRadius: 6, border: `1px solid ${t.border}`, background: "transparent", color, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)" }}>
+        Go to {mod.toUpperCase()}
+      </button>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-      {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ marginBottom: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: t.sectionNum, textTransform: "uppercase", letterSpacing: 2, fontFamily: "var(--mono)" }}>Command Center</span>
-        </div>
-        <h2 style={{ margin: 0, fontSize: 28, fontWeight: 800, color: t.text, lineHeight: 1.2, letterSpacing: -0.5 }}>
-          Sirion Growth Intelligence
-        </h2>
-        <p style={{ margin: "6px 0 0", fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
-          AI-powered organic growth platform. Pipeline status, competitive intelligence, and prioritized actions.
-        </p>
-      </div>
 
-      {/* ── Pipeline Flow ── */}
-      <div style={{ ...card({ padding: "18px 24px", marginBottom: 16 }) }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
-            Growth Pipeline
-          </span>
-          <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: completedStages === 5 ? t.green : t.textDim }}>
-            {completedStages}/5 stages active
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
-          {pipelineStages.map((stage, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0 }}>
-              <div
-                onClick={() => onNavigate(stage.action)}
-                style={{
-                  flex: 1, textAlign: "center", padding: "10px 4px", borderRadius: 8, cursor: "pointer",
-                  background: stage.done ? stage.color + "12" : "transparent",
-                  border: `1px solid ${stage.done ? stage.color + "40" : t.border}`,
-                  transition: "all 0.2s",
-                }}>
-                <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "var(--mono)", color: stage.done ? stage.color : t.textGhost, lineHeight: 1 }}>
-                  {stage.done ? stage.count : "--"}
-                </div>
-                <div style={{ fontSize: 11, color: stage.done ? t.textSec : t.textGhost, marginTop: 3, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  {stage.label}
-                </div>
-              </div>
-              {i < pipelineStages.length - 1 && (
-                <div style={{ padding: "0 4px", color: stage.done ? stage.color : t.textGhost, fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                  {"\u2192"}
-                </div>
-              )}
+      {/* ── ROW 1: SCORE CARDS ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+        {[
+          {
+            label: "AI Visibility",
+            value: scanScores ? overallScore : "--",
+            unit: "/ 100",
+            color: scanScores ? scoreColor(overallScore, 30, 60) : t.textGhost,
+            sub: scannedAt ? `Scanned ${fmtTime(scannedAt)}` : "No scan yet",
+            action: "m2",
+          },
+          {
+            label: "Mention Rate",
+            value: scanScores ? `${mentionRate}%` : "--",
+            unit: "",
+            color: scanScores ? scoreColor(mentionRate, 30, 60) : t.textGhost,
+            sub: scanLlms.length ? `across ${scanLlms.length} LLMs` : "Run M2 scan",
+            action: "m2",
+          },
+          {
+            label: "Authority Gaps",
+            value: gapCount || "--",
+            unit: gapCount ? "domains" : "",
+            color: gapCount > 15 ? "#ef4444" : gapCount > 8 ? "#f59e0b" : gapCount > 0 ? "#22c55e" : t.textGhost,
+            sub: gapCount ? "zero Sirion presence" : "Run M3 analysis",
+            action: "m3",
+          },
+          {
+            label: "Share of Voice",
+            value: scanScores ? `${shareOfVoice}%` : "--",
+            unit: "",
+            color: scanScores ? scoreColor(shareOfVoice, 15, 30) : t.textGhost,
+            sub: competitorData.length ? `vs ${competitorData.length} vendors` : "vs competitors",
+            action: "m2",
+          },
+        ].map((s, i) => (
+          <div key={i} onClick={() => onNavigate(s.action)} style={{
+            ...card({ padding: "16px 18px", cursor: "pointer", borderLeft: `3px solid ${s.color}` }),
+            transition: "all 0.2s",
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
+              {s.label}
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Competitive Alert (when scan data exists) ── */}
-      {scanScores && (
-        <div style={{
-          ...card({
-            borderLeft: `3px solid ${mentionRate < 30 ? t.red : mentionRate < 60 ? t.orange : t.green}`,
-            padding: "16px 20px", marginBottom: 16,
-          }),
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: mentionRate < 30 ? t.red : t.orange, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
-              {mentionRate < 30 ? "Competitive Alert" : mentionRate < 60 ? "Visibility Gap" : "Tracking Status"}
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>
-            <div>
-              <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--mono)", color: mentionRate < 30 ? t.red : mentionRate < 60 ? t.orange : t.green }}>
-                {mentionRate}%
+            <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+              <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--mono)", color: s.color, lineHeight: 1 }}>
+                {s.value}
               </span>
-              <span style={{ fontSize: 12, color: t.textSec, marginLeft: 6 }}>AI mention rate</span>
+              {s.unit && <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>{s.unit}</span>}
             </div>
-            <div style={{ width: 1, height: 28, background: t.border }} />
-            <div>
-              <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--mono)", color: t.text }}>{overallScore}</span>
-              <span style={{ fontSize: 12, color: t.textSec, marginLeft: 6 }}>visibility score</span>
-            </div>
-            <div style={{ width: 1, height: 28, background: t.border }} />
-            <div style={{ fontSize: 12, color: t.textSec, lineHeight: 1.6, flex: 1, minWidth: 200 }}>
-              {mentionRate === 0
-                ? "Sirion is not being mentioned by any AI platform. Buyers asking about CLM are getting competitor recommendations."
-                : mentionRate < 30
-                  ? "Sirion appears in less than a third of AI responses. Competitors are dominating the narrative."
-                  : mentionRate < 60
-                    ? "Sirion has moderate visibility but significant gaps remain. Targeted content can close the gap."
-                    : "Sirion has strong AI presence. Focus on maintaining position and expanding to new queries."}
-            </div>
+            <div style={{ fontSize: 10, color: t.textSec, marginTop: 6, fontFamily: "var(--mono)" }}>{s.sub}</div>
           </div>
+        ))}
+      </div>
+
+      {/* ── SCAN PROGRESS + STALENESS ── */}
+      {(staleness.m2 || staleness.m3 || scanProgress) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+          {scanProgress && (
+            <div style={{ ...card({ padding: "12px 16px" }), borderLeft: `3px solid ${t.client}`, display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.client, fontFamily: "var(--mono)" }}>SCANNING</span>
+              <span style={{ fontSize: 12, color: t.text }}>{scanProgress.completed} / {scanProgress.total} questions</span>
+              <div style={{ flex: 1, height: 4, background: t.border, borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${Math.round((scanProgress.completed / scanProgress.total) * 100)}%`, height: "100%", background: t.client, borderRadius: 2, transition: "width 0.3s" }} />
+              </div>
+            </div>
+          )}
+          {staleness.m2 && (
+            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M2 scan used older questions</span>
+              <span style={{ fontSize: 11, color: t.textDim }}>Re-scan recommended.</span>
+            </div>
+          )}
+          {staleness.m3 && (
+            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M3 analysis used older scan</span>
+              <span style={{ fontSize: 11, color: t.textDim }}>Re-analyze recommended.</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── This Week's Priorities ── */}
-      <div style={{
-        ...card({ padding: "16px 20px", marginBottom: 16 }),
-        borderLeft: `3px solid ${t.brand}`,
-      }}>
+      {/* ── ROW 2: THIS WEEK'S PRIORITIES ── */}
+      <div style={{ ...card({ padding: "16px 20px", marginBottom: 16 }), borderLeft: `3px solid ${t.brand}` }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 12 }}>
           This Week's Priorities
         </div>
@@ -284,227 +265,168 @@ function Dashboard({ t, onNavigate }) {
                 border: i === 0 ? "none" : `1px solid ${t.border}`,
                 background: i === 0 ? t.brand : "transparent",
                 color: i === 0 ? "#fff" : t.brand,
-                fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)",
-                flexShrink: 0,
+                fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)", flexShrink: 0,
               }}>Go</button>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ── Module Health Grid ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }}>
-        {[
-          {
-            n: "M1", key: "m1", label: "Question Generator", color: t.brand,
-            value: m1.hasData ? m1.count : "--", unit: "questions",
-            sub: m1.hasData
-              ? `${m1Personas.length} personas, ${researchedPersonas.length} researched`
-              : "Generates buyer-intent questions for all personas",
-          },
-          {
-            n: "M2", key: "m2", label: "Perception Monitor", color: t.client,
-            value: m2.hasData ? (scanScores?.overall || 0) : "--", unit: m2.hasData ? "/ 100 score" : "scans",
-            sub: m2.hasData
-              ? `${mentionRate}% mention | Pre-Sig: ${clmCounts["pre-signature"]} | Post-Sig: ${clmCounts["post-signature"]} | Full-Stack: ${clmCounts["full-stack"]}`
-              : "Scans Claude, Gemini, ChatGPT for brand mentions",
-          },
-          {
-            n: "M3", key: "m3", label: "Authority Ring", color: "#fbbf24",
-            value: m3.hasData ? m3.count : "45+", unit: "domains",
-            sub: m3.hasData
-              ? "Backlink intelligence mapped"
-              : "Pre-loaded with 45+ verified authority domains",
-          },
-          {
-            n: "M4", key: "m4", label: "Buying Stage Guide", color: "#4ade80",
-            value: m4.hasData ? m4.count : "--", unit: "analyses",
-            sub: m4.hasData
-              ? "Decision maker readiness tracked"
-              : "Analyzes buying readiness from LinkedIn + research",
-          },
-          {
-            n: "M5", key: "m5", label: "CLM Advisor", color: "#fb923c",
-            value: "15", unit: "vendors",
-            sub: m5.hasData
-              ? "Recommendations generated"
-              : "Personalized vendor comparison engine",
-          },
-        ].map((m, i) => (
-          <div key={i} onClick={() => onNavigate(m.key)}
-            style={{
-              ...card({ padding: "16px 18px", cursor: "pointer", borderTop: `2px solid ${m.color}` }),
-              transition: "all 0.2s",
-            }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{
-                fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
-                color: m.color, background: m.color + "15", padding: "2px 6px", borderRadius: 4,
-              }}>{m.n}</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{m.label}</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "var(--mono)", color: m.color, lineHeight: 1 }}>
-                {m.value}
-              </span>
-              <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>{m.unit}</span>
-            </div>
-            <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.5 }}>{m.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Staleness Warnings + Scan Progress ── */}
-      {(staleness.m2 || staleness.m3 || scanProgress) && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-          {scanProgress && (
-            <div style={{ ...card({ padding: "12px 16px" }), borderLeft: `3px solid ${t.client}`, display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: t.client, fontFamily: "var(--mono)" }}>SCANNING</span>
-              <span style={{ fontSize: 12, color: t.text }}>{scanProgress.completed} / {scanProgress.total} questions scanned</span>
-              <div style={{ flex: 1, height: 4, background: t.border, borderRadius: 2, overflow: "hidden" }}>
-                <div style={{ width: `${Math.round((scanProgress.completed / scanProgress.total) * 100)}%`, height: "100%", background: t.client, borderRadius: 2, transition: "width 0.3s" }} />
-              </div>
-            </div>
-          )}
-          {staleness.m2 && (
-            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M2 scan used older questions</span>
-              <span style={{ fontSize: 11, color: t.textDim }}>Questions changed since last scan. Re-scan recommended.</span>
-            </div>
-          )}
-          {staleness.m3 && (
-            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M3 analysis used older scan</span>
-              <span style={{ fontSize: 11, color: t.textDim }}>Perception scan changed since last authority analysis.</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Analytics Charts ── */}
+      {/* ── ROW 3: LLM BREAKDOWN + COMPETITOR LEADERBOARD ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        {/* AI Visibility by LLM — Radar Chart */}
+        {/* Left: LLM Breakdown */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: t.client, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.client, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
             AI Visibility by LLM
           </div>
-          {llmRadarData.some(d => d.rate > 0) ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <RadarChart data={llmRadarData} cx="50%" cy="50%" outerRadius={70}>
-                <PolarGrid stroke={t.border} />
-                <PolarAngleAxis dataKey="llm" tick={{ fontSize: 11, fill: t.textSec, fontFamily: "var(--mono)" }} />
-                <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 9, fill: t.textDim }} />
-                <Radar name="Mention %" dataKey="rate" stroke={t.client} fill={t.client} fillOpacity={0.25} strokeWidth={2} />
-              </RadarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
-              <div style={{ fontSize: 32, opacity: 0.3 }}>&#x1F50D;</div>
-              <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Run M2 scan to populate</div>
-            </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "center", gap: 16, marginTop: 6 }}>
-            {llmRadarData.map(d => (
-              <div key={d.llm} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "var(--mono)", color: d.rate > 0 ? t.client : t.textGhost }}>{d.rate}%</div>
-                <div style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>{d.llm}</div>
+          {llmData.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {llmData.map(d => (
+                <div key={d.id}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{d.name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: scoreColor(d.rate, 30, 60) }}>{d.rate}%</span>
+                  </div>
+                  <div style={{ height: 8, background: t.border, borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ width: `${d.rate}%`, height: "100%", background: scoreColor(d.rate, 30, 60), borderRadius: 4, transition: "width 0.5s ease" }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", marginTop: 2 }}>
+                    mentioned in {d.mentioned}/{d.total} queries
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", borderTop: `1px solid ${t.border}`, paddingTop: 8 }}>
+                {totalQueries} queries across {scanLlms.length} LLMs
               </div>
-            ))}
-          </div>
+            </div>
+          ) : emptyState("Run M2 scan to see LLM data", "m2", t.client)}
         </div>
 
-        {/* Authority Domain Status — Donut Chart */}
+        {/* Right: Competitor Leaderboard */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 12 }}>
-            Authority Domain Status
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+            Competitor Leaderboard
           </div>
-          <div style={{ position: "relative" }}>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={domainStatusData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value" stroke="none">
-                  {domainStatusData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                </Pie>
-                <Tooltip contentStyle={tipStyle} formatter={(v, n) => [`${v} domains`, n]} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
-              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "var(--mono)", color: t.text }}>{domainStatusData.reduce((s, d) => s + d.value, 0)}</div>
-              <div style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>DOMAINS</div>
-            </div>
-          </div>
-          <div style={{ display: "flex", justifyContent: "center", gap: 14, marginTop: 4 }}>
-            {domainStatusData.map(d => (
-              <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
-                <span style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>{d.name} ({d.value})</span>
+          {competitorData.length > 0 ? (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 60px 50px", gap: 4, padding: "0 0 6px", borderBottom: `1px solid ${t.border}` }}>
+                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>#</span>
+                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>VENDOR</span>
+                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", textAlign: "right" }}>MENTIONS</span>
+                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", textAlign: "right" }}>TOP 3</span>
               </div>
-            ))}
-          </div>
+              {competitorData.slice(0, 6).map((c, i) => {
+                const isSirion = c.name.toLowerCase().includes("sirion");
+                return (
+                  <div key={i} style={{
+                    display: "grid", gridTemplateColumns: "24px 1fr 60px 50px", gap: 4,
+                    padding: "7px 4px", borderBottom: `1px solid ${t.border}22`,
+                    background: isSirion ? t.brand + "10" : "transparent",
+                    borderRadius: isSirion ? 4 : 0, marginTop: 2,
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", color: t.textDim }}>{i + 1}</span>
+                    <span style={{ fontSize: 12, fontWeight: isSirion ? 700 : 500, color: isSirion ? t.brand : t.text }}>
+                      {c.name}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: t.text, textAlign: "right" }}>{c.mentions}</span>
+                    <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: t.textSec, textAlign: "right" }}>{c.top3}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : emptyState("Run M2 scan to see competitor data", "m2", "#f97316")}
         </div>
       </div>
 
-      {/* Row 2: CLM Lifecycle + Domain Priority Distribution */}
+      {/* ── ROW 4: CLM LIFECYCLE + AUTHORITY RING ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        {/* CLM Lifecycle Distribution */}
+        {/* Left: CLM Lifecycle */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
             CLM Lifecycle Coverage
           </div>
-          {scanResultsArr.length > 0 ? (
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={clmChartData} layout="vertical" margin={{ left: 80, right: 20, top: 5, bottom: 5 }}>
-                <CartesianGrid stroke={t.border} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: t.textDim, fontFamily: "var(--mono)" }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: t.textSec, fontFamily: "var(--mono)" }} width={75} />
-                <Tooltip contentStyle={tipStyle} formatter={v => [`${v} queries`]} />
-                <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                  {clmChartData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
-              <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Export questions with lifecycle tags to see data</div>
+          {totalQueries > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {clmData.map(d => {
+                const pct = totalQueries ? Math.round((d.count / totalQueries) * 100) : 0;
+                return (
+                  <div key={d.name}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{d.name}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: d.color }}>{pct}%</span>
+                    </div>
+                    <div style={{ height: 8, background: t.border, borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: d.color, borderRadius: 4, transition: "width 0.5s ease" }} />
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textDim, marginTop: 2, fontFamily: "var(--mono)" }}>
+                      {d.count}/{totalQueries} queries · {d.desc}
+                    </div>
+                  </div>
+                );
+              })}
+              {clmCounts["pre-signature"] < clmCounts["post-signature"] && (
+                <div style={{ fontSize: 11, color: "#f59e0b", padding: "8px 10px", background: "#f59e0b10", borderRadius: 6, lineHeight: 1.5 }}>
+                  Pre-signature coverage is low. Create content targeting pre-sign queries to expand Sirion's perception beyond post-signature.
+                </div>
+              )}
             </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "center", gap: 14, marginTop: 8 }}>
-            {clmChartData.map(d => (
-              <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: d.color }} />
-                <span style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>{d.name}: {d.count}</span>
-              </div>
-            ))}
-          </div>
+          ) : emptyState("Tag questions with lifecycle stages in M1", "m1", "#a78bfa")}
         </div>
 
-        {/* Domain Priority Distribution */}
+        {/* Right: Authority Ring Status */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 12 }}>
-            Domain Priority Distribution
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+            Authority Ring Status
           </div>
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={domainPriorityData} margin={{ left: 5, right: 5, top: 5, bottom: 5 }}>
-              <CartesianGrid stroke={t.border} vertical={false} />
-              <XAxis dataKey="range" tick={{ fontSize: 10, fill: t.textDim, fontFamily: "var(--mono)" }} />
-              <YAxis tick={{ fontSize: 10, fill: t.textDim, fontFamily: "var(--mono)" }} allowDecimals={false} />
-              <Tooltip contentStyle={tipStyle} formatter={v => [`${v} domains`]} />
-              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                {domainPriorityData.map((d, i) => <Cell key={i} fill={d.color} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", textAlign: "center", marginTop: 6 }}>
-            Priority score ranges (higher = more urgent)
-          </div>
+          {totalDomains > 0 ? (
+            <div>
+              {/* Stacked horizontal bar */}
+              <div style={{ height: 28, display: "flex", borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
+                {authorityData.filter(d => d.value > 0).map(d => (
+                  <div key={d.name} style={{
+                    width: `${(d.value / totalDomains) * 100}%`, background: d.color,
+                    display: "flex", alignItems: "center", justifyContent: "center", minWidth: 20,
+                  }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", fontFamily: "var(--mono)" }}>{d.value}</span>
+                  </div>
+                ))}
+              </div>
+              {/* Legend */}
+              <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+                {authorityData.map(d => (
+                  <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
+                    <span style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>{d.name} ({d.value})</span>
+                  </div>
+                ))}
+              </div>
+              {/* Top gap domains */}
+              {topGapDomains.length > 0 && (
+                <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
+                  <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>TOP PRIORITY GAPS</div>
+                  {topGapDomains.map((d, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", color: "#ef4444", width: 16 }}>{i + 1}</span>
+                      <span style={{ fontSize: 12, color: t.text, flex: 1 }}>{d.domain}</span>
+                      <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: t.textDim }}>DA {d.da}</span>
+                      <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textGhost, background: t.border + "60", padding: "1px 6px", borderRadius: 3 }}>
+                        P{Math.round(d.priority || 0)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : emptyState("Run M3 analysis to see authority data", "m3", "#fbbf24")}
         </div>
       </div>
 
-      {/* ── Persona Intelligence ── */}
+      {/* ── ROW 5: PERSONA COVERAGE ── */}
       {m1Personas.length > 0 && (
-        <div style={{ ...card({ padding: 20 }) }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ ...card({ padding: "16px 20px" }) }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
-              Persona Intelligence ({m1Personas.length})
+              Persona Coverage ({m1Personas.length})
             </span>
             <button onClick={() => onNavigate("m1")} style={{
               padding: "4px 12px", borderRadius: 6, border: `1px solid ${t.border}`,
@@ -512,22 +434,13 @@ function Dashboard({ t, onNavigate }) {
               cursor: "pointer", fontFamily: "var(--mono)",
             }}>View All</button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
             {m1Personas.slice(0, 6).map((p, i) => (
-              <div key={i} style={{ padding: "12px 14px", borderRadius: 8, background: t.bgAlt, border: `1px solid ${t.border}` }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: t.text, marginBottom: 2 }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: t.textSec }}>{p.title}</div>
-                <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{p.company}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: p.researchSummary ? t.green : t.yellow }} />
-                  <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: p.researchSummary ? t.green : t.yellow }}>
-                    {p.researchSummary ? "Researched" : "Pending"}
-                  </span>
-                  {p.clmReadiness && (
-                    <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: t.client, marginLeft: "auto" }}>
-                      CLM {p.clmReadiness}/10
-                    </span>
-                  )}
+              <div key={i} style={{ padding: "10px 12px", borderRadius: 8, background: t.bgAlt, border: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: p.researchSummary ? "#22c55e" : "#f59e0b", flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
+                  <div style={{ fontSize: 10, color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title || p.company}</div>
                 </div>
               </div>
             ))}

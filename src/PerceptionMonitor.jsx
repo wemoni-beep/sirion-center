@@ -827,6 +827,21 @@ export default function App() {
           (result.llms || []).map(lid => [lid, r.analyses?.[lid]?.mentioned || false])
         ),
       }));
+      // Build compact competitor summary for Dashboard leaderboard
+      const _compAgg = {};
+      result.results.forEach(r => {
+        (result.llms || []).forEach(lid => {
+          const a = r.analyses?.[lid];
+          if (!a || a._error) return;
+          (a.vendors_mentioned || []).forEach(v => {
+            if (!_compAgg[v.name]) _compAgg[v.name] = { name: v.name, mentions: 0, top3: 0, positive: 0 };
+            _compAgg[v.name].mentions++;
+            if (v.position <= 3) _compAgg[v.name].top3++;
+            if (v.sentiment === "positive") _compAgg[v.name].positive++;
+          });
+        });
+      });
+      const competitorSummary = Object.values(_compAgg).sort((a, b) => b.mentions - a.mentions).slice(0, 10);
       updateModule("m2", {
         scanResults: { llms: result.llms, results: compactResults },
         scores: result.scores,
@@ -836,6 +851,7 @@ export default function App() {
         stageBreakdown: payload.stageBreakdown,
         recommendations: payload.allRecommendations,
         exportPayload: payload,
+        competitorSummary,
         scanProgress: null, // Clear progress indicator — scan is done
         // Phase 3: Scan versioning — track which M1 generation this scan used
         generationId: new Date().toISOString(),

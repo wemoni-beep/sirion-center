@@ -452,6 +452,8 @@ export default function AuthorityRing() {
       aiCitedDomains: aiCitedDomains.slice(0, 50),
       gapCount: stats.zeros,
       strongCount: stats.strong,
+      presentCount: stats.present,
+      totalDomains: stats.total,
       analyzedAt: new Date().toISOString(),
     };
     // Phase 3: Add generation tracking so Dashboard can detect staleness
