@@ -6,9 +6,12 @@
 const DB_NAME = "xtrusio-m1";
 const DB_VERSION = 2;
 
-// ── Open / Create Database ──────────────────────────────
+// ── Open / Create Database — singleton connection ────────
+let _dbPromise = null;
+
 function openDB() {
-  return new Promise((resolve, reject) => {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
@@ -39,9 +42,19 @@ function openDB() {
         ps.createIndex("createdAt", "createdAt", { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      // BUG-006 fix: reset singleton if connection is closed or another tab upgrades
+      db.onclose = () => { _dbPromise = null; };
+      db.onversionchange = () => { db.close(); _dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => {
+      _dbPromise = null; // allow retry on next call
+      reject(req.error);
+    };
   });
+  return _dbPromise;
 }
 
 // ── Question Hash (for deduplication) ───────────────────
@@ -67,11 +80,31 @@ export async function saveQuestions(questions) {
       store.put(q);
     }
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: saveQuestions failed:", e);
+    return false;
+  }
+}
+
+// ── Delete Questions by ID (batch) ─────────────────────
+export async function deleteQuestions(ids) {
+  if (!ids?.length) return true;
+  try {
+    const db = await openDB();
+    const tx = db.transaction("questions", "readwrite");
+    const store = tx.objectStore("questions");
+    for (const id of ids) {
+      store.delete(id);
+    }
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => { resolve(true); };
+      tx.onerror = () => { reject(tx.error); };
+    });
+  } catch (e) {
+    console.warn("questionDB: deleteQuestions failed:", e);
     return false;
   }
 }
@@ -85,8 +118,8 @@ export async function getQuestionsForCompany(company) {
     const idx = store.index("company");
     const req = idx.getAll(company);
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || []); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getQuestionsForCompany failed:", e);
@@ -129,8 +162,8 @@ export async function saveMacro(question) {
 
     store.put(entry);
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: saveMacro failed:", e);
@@ -146,8 +179,8 @@ export async function getAllMacros() {
     const store = tx.objectStore("macroBank");
     const req = store.getAll();
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || []); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getAllMacros failed:", e);
@@ -162,8 +195,8 @@ export async function saveCompanyIntel(intel) {
     const tx = db.transaction("companyIntel", "readwrite");
     tx.objectStore("companyIntel").put(intel);
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: saveCompanyIntel failed:", e);
@@ -179,8 +212,8 @@ export async function getCompanyIntel(company) {
     const tx = db.transaction("companyIntel", "readonly");
     const req = tx.objectStore("companyIntel").get(key);
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || null); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || null);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getCompanyIntel failed:", e);
@@ -218,7 +251,6 @@ export async function getKnowledgeBaseStats() {
       r.onerror = () => res(0);
     });
 
-    db.close();
     return { totalQuestions: qCount, totalMacros: mCount, companiesResearched: cCount, totalPersonas: pCount };
   } catch (e) {
     console.warn("questionDB: getKnowledgeBaseStats failed:", e);
@@ -233,8 +265,8 @@ export async function getAllQuestions() {
     const tx = d.transaction("questions", "readonly");
     const req = tx.objectStore("questions").getAll();
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { d.close(); resolve(req.result || []); };
-      req.onerror = () => { d.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getAllQuestions failed:", e);
@@ -249,8 +281,8 @@ export async function getAllCompanyIntel() {
     const tx = d.transaction("companyIntel", "readonly");
     const req = tx.objectStore("companyIntel").getAll();
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { d.close(); resolve(req.result || []); };
-      req.onerror = () => { d.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getAllCompanyIntel failed:", e);
@@ -284,8 +316,8 @@ export async function hydrateQuestions(fbQuestions) {
       }
     }
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { d.close(); resolve(added); };
-      tx.onerror = () => { d.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(added);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: hydrateQuestions failed:", e);
@@ -330,8 +362,8 @@ export async function hydrateMacros(fbMacros) {
       }
     }
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { d.close(); resolve(added); };
-      tx.onerror = () => { d.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(added);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: hydrateMacros failed:", e);
@@ -361,8 +393,8 @@ export async function hydrateCompanyIntel(fbIntel) {
       }
     }
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { d.close(); resolve(added); };
-      tx.onerror = () => { d.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(added);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: hydrateCompanyIntel failed:", e);
@@ -381,8 +413,8 @@ export async function savePersona(persona) {
     const tx = db.transaction("personas", "readwrite");
     tx.objectStore("personas").put(persona);
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: savePersona failed:", e);
@@ -400,8 +432,8 @@ export async function savePersonas(personas) {
       store.put(p);
     }
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: savePersonas failed:", e);
@@ -417,8 +449,8 @@ export async function getPersonasForCompany(company) {
     const idx = tx.objectStore("personas").index("company");
     const req = idx.getAll(company);
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || []); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getPersonasForCompany failed:", e);
@@ -433,8 +465,8 @@ export async function getAllPersonas() {
     const tx = db.transaction("personas", "readonly");
     const req = tx.objectStore("personas").getAll();
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || []); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || []);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getAllPersonas failed:", e);
@@ -449,8 +481,8 @@ export async function getPersonaById(id) {
     const tx = db.transaction("personas", "readonly");
     const req = tx.objectStore("personas").get(id);
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => { db.close(); resolve(req.result || null); };
-      req.onerror = () => { db.close(); reject(req.error); };
+      req.onsuccess = () => { resolve(req.result || null);};
+      req.onerror = () => { reject(req.error);};
     });
   } catch (e) {
     console.warn("questionDB: getPersonaById failed:", e);
@@ -471,14 +503,14 @@ export async function updatePersona(id, updates) {
       r.onerror = () => res(null);
     });
 
-    if (!existing) { db.close(); return false; }
+    if (!existing) return false;
 
     const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     store.put(merged);
 
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: updatePersona failed:", e);
@@ -493,8 +525,8 @@ export async function deletePersona(id) {
     const tx = db.transaction("personas", "readwrite");
     tx.objectStore("personas").delete(id);
     return new Promise((resolve, reject) => {
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.oncomplete = () => { resolve(true);};
+      tx.onerror = () => { reject(tx.error);};
     });
   } catch (e) {
     console.warn("questionDB: deletePersona failed:", e);

@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useTheme } from "./ThemeContext";
 import { usePipeline } from "./PipelineContext";
 import { db } from "./firebase.js";
 import { callClaude, callClaudeFast } from "./claudeApi.js";
 import {
-  questionHash, saveQuestions, getQuestionsForCompany,
+  questionHash, saveQuestions, deleteQuestions, getQuestionsForCompany,
   saveMacro, getAllMacros, saveCompanyIntel, getCompanyIntel,
   getKnowledgeBaseStats, savePersona, savePersonas,
   getPersonasForCompany, getAllPersonas, updatePersona, deletePersona,
@@ -236,6 +236,80 @@ RULES:
 - painPoints: Must be role-specific (CPO cares about procurement, GC about legal risk, etc.)
 - clmReadiness: 1-10 score based on all signals
 - personalizedQuestionAngles: These will be used to generate hyper-personalized questions`;
+
+/* ── Question Cleanup Prompt ────────────────────────────── */
+const QUESTION_CLEANUP_PROMPT = `You are a Question Bank Editor for a B2B CLM (Contract Lifecycle Management) content strategy team.
+
+YOUR TASK: Review a list of buyer-intent questions and identify groups of highly similar or near-duplicate questions.
+
+SIMILARITY CRITERIA:
+- Same core intent (even if phrased differently)
+- Same buyer concern answered from the same angle
+- One is a subset or minor rephrasing of another
+- 85%+ semantic overlap
+
+FOR EACH GROUP:
+- Pick the BEST question to keep (most specific, most search-intent aligned, clearest)
+- List the others as remove candidates
+
+OUTPUT — valid JSON only:
+{
+  "groups": [
+    {
+      "keep": { "id": "question_id", "query": "The question to keep", "reason": "Why this is the best" },
+      "remove": [
+        { "id": "question_id", "query": "Near-duplicate to remove" }
+      ]
+    }
+  ],
+  "totalRemoved": 5,
+  "summary": "One sentence summary of what was cleaned up"
+}
+
+RULES:
+- Only flag questions that are genuinely similar (85%+ overlap)
+- If all questions are distinct, return { "groups": [], "totalRemoved": 0, "summary": "No duplicates found" }
+- Do NOT merge questions from different personas or different buying stages
+- Keep the more specific, more search-intent aligned version`;
+
+/* ── Find Similar Prompt ────────────────────────────────── */
+const FIND_SIMILAR_PROMPT = `You are a Senior B2B Market Intelligence Analyst specializing in CLM (Contract Lifecycle Management) buyers.
+
+YOUR MISSION: Given a researched decision maker, find 8-10 similar CLM-relevant people at comparable companies. Use web search to find real people.
+
+SIMILARITY CRITERIA:
+- Same or adjacent industry
+- Revenue within 0.5x–2x of source company
+- Same geographic market (same country / region)
+- Similar contract complexity: enterprise B2B, multi-department, high volume
+
+PERSONA COVERAGE: Mix buyer roles — GC, CPO, CIO, VP Legal Ops, CFO, CTO, Contract Manager, Procurement Director. Prioritize the buying committee most relevant to this industry.
+
+LINKEDIN URL RULES:
+- Confirmed person with known profile: use https://linkedin.com/in/firstname-lastname format
+- Otherwise: use https://www.linkedin.com/search/results/people/?keywords=FirstName+LastName+CompanyName
+- confidence 0.85+ = you found a real profile URL; 0.6 = best-guess search
+
+OUTPUT — valid JSON only, no markdown:
+{
+  "sourceContext": "One sentence: why these targets match",
+  "suggestions": [{
+    "name": "First Last",
+    "title": "Chief Procurement Officer",
+    "company": "CompanyName",
+    "companyUrl": "https://company.com",
+    "linkedinUrl": "https://linkedin.com/in/...",
+    "linkedinSearchUrl": "https://www.linkedin.com/search/results/people/?keywords=First+Last+CompanyName",
+    "location": "City, Country",
+    "companySize": "1,000–5,000",
+    "companyRevenue": "$200M–$500M",
+    "industry": "Enterprise Software",
+    "personaType": "cpo",
+    "clmSignals": "10K+ contracts/year; dedicated contract ops team hired 2024",
+    "confidence": 0.85,
+    "reason": "Same SaaS vertical, similar revenue, CPO is primary CLM buyer"
+  }]
+}`;
 
 /* ── AI Question Generation Prompt ─────────────────────── */
 const QUESTION_GEN_SYSTEM = `You are a Senior CLM Market Intelligence Analyst specializing in buyer-intent question research for enterprise Contract Lifecycle Management (CLM) platforms.
@@ -681,9 +755,12 @@ export default function QuestionGenerator({ onNavigate }) {
   const [filterLifecycle, setFilterLifecycle] = useState("all");
   const [exportCopied, setExportCopied] = useState(false);
   const [autoGenMsg, setAutoGenMsg] = useState(""); // notification from auto-question gen
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupPreview, setCleanupPreview] = useState(null); // { groups: [{keep, remove[]}], totalRemoved }
   const [selectedQs, setSelectedQs] = useState(new Set());
 
   // ── AI generation state ──
+  const isGeneratingRef = useRef(false); // prevents double-click triggering duplicate API calls
   const [aiQuestions, setAiQuestions] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState(0);
@@ -705,7 +782,12 @@ export default function QuestionGenerator({ onNavigate }) {
 
   // ── Decision Matrix state ──
   const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
-  const [decisionScores, setDecisionScores] = useState({}); // key: "gc.criterion_id" → score 1-10
+  const [decisionScores, setDecisionScores] = useState(() => {
+    try { const s = localStorage.getItem("xt_decision_scores"); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  }); // key: "gc.criterion_id" → score 1-10
+  const [expandedCriterion, setExpandedCriterion] = useState(null); // key of expanded row
+  const [autoGrading, setAutoGrading] = useState(false);
+  const [autoGradeSource, setAutoGradeSource] = useState(null); // { scoredAt, count }
 
   // ── Knowledge base state ──
   const [kbStats, setKbStats] = useState({ totalQuestions: 0, totalMacros: 0, companiesResearched: 0, totalPersonas: 0 });
@@ -715,13 +797,19 @@ export default function QuestionGenerator({ onNavigate }) {
   // ── Persona Research state ──
   const [personaProfiles, setPersonaProfiles] = useState([]);
   const [linkedinPaste, setLinkedinPaste] = useState("");
-  const [importMode, setImportMode] = useState("linkedin"); // "linkedin" | "csv" | "web"
-  const [webResearchName, setWebResearchName] = useState("");
-  const [webResearchTitle, setWebResearchTitle] = useState("");
-  const [webResearchCompany, setWebResearchCompany] = useState("");
+  const [importMode, setImportMode] = useState("linkedin"); // "linkedin" | "csv"
+  // ── Find Similar state ──
+  const [personaGeneratedQs, setPersonaGeneratedQs] = useState({}); // { [personaId]: Question[] }
+  const [findSimilarId, setFindSimilarId] = useState(null);
+  const [findSimilarLoading, setFindSimilarLoading] = useState(false);
+  const [findSimilarResults, setFindSimilarResults] = useState({});  // { [personaId]: suggestion[] }
+  const [similarRowStates, setSimilarRowStates] = useState({});       // { [rowKey]: { expanded, paste, loading, done, error, step } }
   const [importLoading, setImportLoading] = useState(false);
   const [importStep, setImportStep] = useState(0);
   const [importError, setImportError] = useState("");
+  const [webResearchName, setWebResearchName] = useState("");
+  const [webResearchTitle, setWebResearchTitle] = useState("");
+  const [webResearchCompany, setWebResearchCompany] = useState("");
   const [researchingId, setResearchingId] = useState(null);
   const [researchStep, setResearchStep] = useState(0);
   const [targetPersonaId, setTargetPersonaId] = useState("all"); // for persona-specific question gen
@@ -754,6 +842,12 @@ export default function QuestionGenerator({ onNavigate }) {
       lifecycle: q.lifecycle || "full-stack",
       source: q.source || "pipeline",
       classification: q.classification || "macro",
+      intentType: q.intentType || null,
+      personaFit: q.personaFit != null ? q.personaFit : null,
+      bestPersona: q.bestPersona || null,
+      volumeTier: q.volumeTier || null,
+      criterion: q.criterion || null,
+      enrichedAt: q.enrichedAt || null,
       company: companyName,
       savedAt: new Date().toISOString(),
     }));
@@ -772,12 +866,26 @@ export default function QuestionGenerator({ onNavigate }) {
         const stats = await getKnowledgeBaseStats();
         setKbStats(stats);
       } catch {}
+      let loadedPersonas = []; // shared with hydration block below
       try {
-        const personas = await getAllPersonas();
-        setPersonaProfiles(personas);
+        // Primary: file store (survives code changes + Vite rebuilds)
+        const filePersonas = await db.getAll("m1_personas");
+        if (filePersonas.length > 0) {
+          loadedPersonas = filePersonas;
+          setPersonaProfiles(filePersonas);
+          savePersonas(filePersonas).catch(() => {}); // sync to IndexedDB as secondary
+        } else {
+          // Fallback: IndexedDB (in case file store is empty)
+          const idbPersonas = await getAllPersonas();
+          loadedPersonas = idbPersonas;
+          setPersonaProfiles(idbPersonas);
+          if (idbPersonas.length > 0) {
+            idbPersonas.forEach(p => db.saveWithId("m1_personas", p.id, p).catch(() => {}));
+          }
+        }
       } catch {}
 
-      // 2. Hydrate from Firebase in background (restores data after cache clear)
+      // 2. Hydrate from file store in background (restores data after cache clear)
       try {
         const [fbQuestions, fbMacros, fbIntel] = await Promise.all([
           db.getAllPaginated("m1_questions_v2"),
@@ -788,6 +896,36 @@ export default function QuestionGenerator({ onNavigate }) {
         if (fbQuestions.length > 0) {
           const added = await hydrateQuestions(fbQuestions);
           if (added > 0) changed = true;
+          // Restore persona-generated question panels (survives page reload + Vite rebuilds)
+          // 3-tier fallback: personaId field → targetPersona name → question ID prefix match
+          const nameToPersonaId = {};
+          const prefixToPersonaId = {};
+          loadedPersonas.forEach(p => {
+            if (p.name) nameToPersonaId[p.name.toLowerCase().trim()] = p.id;
+            // Question IDs embed first 20 chars of persona ID: pq-{co}-{personaId[0:20]}-{ts}-{i}
+            prefixToPersonaId[p.id.substring(0, 20)] = p.id;
+          });
+          const byPersona = {};
+          fbQuestions.forEach(q => {
+            if (q.source === "persona-research") {
+              let pid = q.personaId;
+              if (!pid && q.targetPersona) {
+                pid = nameToPersonaId[q.targetPersona.toLowerCase().trim()];
+              }
+              if (!pid && q.id) {
+                // Extract embedded persona ID prefix from question ID
+                const pos = q.id.indexOf("persona-");
+                if (pos >= 0) pid = prefixToPersonaId[q.id.substring(pos, pos + 20)];
+              }
+              if (pid) {
+                if (!byPersona[pid]) byPersona[pid] = [];
+                byPersona[pid].push({ ...q, personaId: pid });
+              }
+            }
+          });
+          if (Object.keys(byPersona).length > 0) {
+            setPersonaGeneratedQs(byPersona);
+          }
         }
         if (fbMacros.length > 0) {
           await hydrateMacros(fbMacros);
@@ -834,6 +972,18 @@ export default function QuestionGenerator({ onNavigate }) {
   // Pipeline questions (from Firebase) are the source of truth for the full count.
   // This ensures the database always shows the complete set (e.g. 138).
   const pipelineQuestions = pipeline.m1.questions || [];
+
+  // ── Auto-restore question bank after page refresh ──
+  // generated resets to false on every reload. If the pipeline already has questions,
+  // restore the bank automatically so the user doesn't have to click "Load KB" again.
+  useEffect(() => {
+    if (!generated && pipeline._loaded && pipelineQuestions.length > 0) {
+      setGenerated(true);
+      getQuestionsForCompany(company).then(cached => {
+        if (cached.length > 0) setKbQuestions(cached);
+      }).catch(() => {});
+    }
+  }, [pipeline._loaded, pipelineQuestions.length]); // eslint-disable-line
   const questions = useMemo(() => {
     if (!generated) return [];
     const seenMap = new Map(); // hash → index in merged
@@ -849,6 +999,12 @@ export default function QuestionGenerator({ onNavigate }) {
         merged.push({ ...q });
       } else {
         const existing = merged[seenMap.get(hash)];
+        // Always propagate id — pipeline questions often have id:undefined, later tiers restore it
+        if (q.id && !existing.id) existing.id = q.id;
+        // Always propagate dedupHash — needed to delete from file store (filename = dedupHash)
+        if (q.dedupHash && !existing.dedupHash) existing.dedupHash = q.dedupHash;
+        // Always propagate personaId — pipeline tier strips it, persona tier restores it
+        if (q.personaId && !existing.personaId) existing.personaId = q.personaId;
         if (mergeMetadata) {
           if (!existing.persona && q.persona) existing.persona = q.persona;
           if (!existing.stage && q.stage) existing.stage = q.stage;
@@ -878,6 +1034,12 @@ export default function QuestionGenerator({ onNavigate }) {
       lifecycle: q.lifecycle || "full-stack",
       source: q.source || "pipeline",
       classification: q.classification || "macro",
+      intentType: q.intentType || null,
+      personaFit: q.personaFit || null,
+      bestPersona: q.bestPersona || null,
+      volumeTier: q.volumeTier || null,
+      criterion: q.criterion || null,
+      enrichedAt: q.enrichedAt || null,
     }));
 
     // Tier 2: Static Q_BANK — fills missing persona/stage on pipeline questions that lost metadata
@@ -909,10 +1071,28 @@ export default function QuestionGenerator({ onNavigate }) {
     enrichQuestions();
   }, [autoEnrichPending, aiLoading, enrichmentLoading, questions.length]); // eslint-disable-line
 
+  // Count questions per specific persona profile (for sub-filter in dropdown + coverage map)
+  // Uses personaGeneratedQs directly — not the main questions list — so the count is accurate
+  // regardless of whether persona questions are merged into the main bank.
+  const profileQuestionCount = useMemo(() => {
+    const counts = {};
+    Object.entries(personaGeneratedQs).forEach(([pid, qs]) => {
+      if (qs.length > 0) counts[pid] = qs.length;
+    });
+    return counts;
+  }, [personaGeneratedQs]);
+
   const filtered = useMemo(() => {
     return questions.filter(q => {
       if (filterStage !== "all" && q.stage !== filterStage) return false;
-      if (filterPersona !== "all" && q.persona !== filterPersona) return false;
+      if (filterPersona !== "all") {
+        const isPersonaType = PERSONAS.some(p => p.id === filterPersona);
+        if (isPersonaType) {
+          if (q.persona !== filterPersona) return false;
+        } else {
+          if (q.personaId !== filterPersona) return false;
+        }
+      }
       if (filterJurisdiction !== "all" && (q.jurisdiction || "Global") !== filterJurisdiction) return false;
       if (filterLifecycle !== "all" && (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack") !== filterLifecycle) return false;
       if (filterIntentType !== "all" && q.intentType !== filterIntentType) return false;
@@ -920,6 +1100,14 @@ export default function QuestionGenerator({ onNavigate }) {
       return true;
     });
   }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier]);
+
+  // When a specific profile is selected in the filter, show that persona's questions
+  // (they live in personaGeneratedQs, not the main bank). Otherwise show filtered bank questions.
+  const displayQuestions = useMemo(() => {
+    const isProfile = filterPersona !== "all" && !PERSONAS.some(p => p.id === filterPersona);
+    if (isProfile) return personaGeneratedQs[filterPersona] || [];
+    return filtered;
+  }, [filtered, filterPersona, personaGeneratedQs]);
 
   const jurisdictions = useMemo(() => {
     const set = new Set();
@@ -1126,6 +1314,8 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
       setEnrichmentStep("Complete");
       setEnrichmentResult({ count: toSave.length, total: allQs.length });
       setEnrichmentLog(prev => [...prev, `Done — ${toSave.length} of ${allQs.length} questions enriched`]);
+      // Auto-sync enriched data to M2 pipeline so Perception Monitor gets updated questions
+      setTimeout(() => exportToM2(), 500);
     } catch (e) {
       setAiError(`Enrichment saved but reload failed: ${e.message}`);
       setEnrichmentStep("");
@@ -1136,6 +1326,8 @@ Example: [{"idx":0,"personaFit":7,"bestPersona":"gc","intentType":"vendor","volu
   };
 
   const generateAIQuestions = async () => {
+    if (isGeneratingRef.current) return; // prevent double-click / concurrent calls
+    isGeneratingRef.current = true;
     setAiLoading(true);
     setAiStep(0);
     setAiCurrentPersona(null);
@@ -1281,6 +1473,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
       setAiError(err.message);
       setAiStep(0);
     } finally {
+      isGeneratingRef.current = false;
       setAiLoading(false);
       setAiCurrentPersona(null);
     }
@@ -1340,6 +1533,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
       };
 
       await savePersona(persona);
+      db.saveWithId("m1_personas", persona.id, persona).catch(() => {});
       setPersonaProfiles(prev => [persona, ...prev]);
       setLinkedinPaste("");
       setImportStep(2);
@@ -1504,6 +1698,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
         if (personas.length === 0) throw new Error("No valid rows found. Make sure your file has a 'name' column.");
 
         await savePersonas(personas);
+        personas.forEach(p => db.saveWithId("m1_personas", p.id, p).catch(() => {}));
         setPersonaProfiles(prev => [...personas, ...prev]);
 
         const stats = await getKnowledgeBaseStats();
@@ -1575,6 +1770,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
       };
 
       await savePersona(persona);
+      db.saveWithId("m1_personas", persona.id, persona).catch(() => {});
       setPersonaProfiles(prev => [persona, ...prev]);
       setWebResearchName("");
       setWebResearchTitle("");
@@ -1600,6 +1796,7 @@ ${!companyIntelSaved ? "Include companyIntel in your response." : "Omit companyI
           }
         }
         if (autoQs.length > 0) {
+          setPersonaGeneratedQs(prev => ({ ...prev, [persona.id]: autoQs }));
           setAutoGenMsg(`\u2713 ${autoQs.length} questions auto-generated from ${persona.name}'s pain points`);
           setTimeout(() => setAutoGenMsg(""), 8000);
         }
@@ -1773,32 +1970,42 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
       };
 
       await updatePersona(personaId, updates);
+      db.saveWithId("m1_personas", personaId, { ...personaProfiles.find(p => p.id === personaId), ...updates }).catch(() => {});
       setPersonaProfiles(prev => prev.map(p => p.id === personaId ? { ...p, ...updates } : p));
       setCreditsUsed(prev => prev + 0.08);
 
-      // ── AUTO-GENERATE QUESTIONS FROM PAIN POINTS (with retry for rate limits) ──
+      // ── AUTO-GENERATE QUESTIONS FROM PAIN POINTS ──
       if (updates.painPoints && updates.painPoints.length > 0) {
-        setResearchStep(4); // "Generating questions from pain points..."
-        const updatedPersona = { ...persona, ...updates };
-        let autoQs = [];
-        const retryDelays = [0, 45000, 75000];
-        for (let attempt = 0; attempt < retryDelays.length; attempt++) {
-          try {
-            if (retryDelays[attempt] > 0) await new Promise(r => setTimeout(r, retryDelays[attempt]));
-            autoQs = await generateQuestionsFromPainPoints(updatedPersona);
-            break;
-          } catch (qErr) {
-            if (attempt < retryDelays.length - 1 && qErr.message?.includes("rate limit")) {
-              console.warn(`Rate limited on question gen, retrying in ${retryDelays[attempt + 1] / 1000}s...`);
-            } else {
-              console.warn("Auto question gen from pain points failed:", qErr);
+        // Check if this persona already has questions — don't regenerate
+        const existingPersonaQs = questions.filter(q => q.personaId === personaId);
+        if (existingPersonaQs.length > 0) {
+          setPersonaGeneratedQs(prev => ({ ...prev, [personaId]: existingPersonaQs }));
+          setAutoGenMsg(`\u2713 ${existingPersonaQs.length} existing questions for ${persona.name}`);
+          setTimeout(() => setAutoGenMsg(""), 5000);
+        } else {
+          setResearchStep(4);
+          const updatedPersona = { ...persona, ...updates };
+          let autoQs = [];
+          const retryDelays = [0, 45000, 75000];
+          for (let attempt = 0; attempt < retryDelays.length; attempt++) {
+            try {
+              if (retryDelays[attempt] > 0) await new Promise(r => setTimeout(r, retryDelays[attempt]));
+              autoQs = await generateQuestionsFromPainPoints(updatedPersona);
               break;
+            } catch (qErr) {
+              if (attempt < retryDelays.length - 1 && qErr.message?.includes("rate limit")) {
+                console.warn(`Rate limited on question gen, retrying in ${retryDelays[attempt + 1] / 1000}s...`);
+              } else {
+                console.warn("Auto question gen from pain points failed:", qErr);
+                break;
+              }
             }
           }
-        }
-        if (autoQs.length > 0) {
-          setAutoGenMsg(`\u2713 ${autoQs.length} questions auto-generated from ${persona.name}'s pain points`);
-          setTimeout(() => setAutoGenMsg(""), 8000);
+          if (autoQs.length > 0) {
+            setPersonaGeneratedQs(prev => ({ ...prev, [personaId]: autoQs }));
+            setAutoGenMsg(`\u2713 ${autoQs.length} questions generated from ${persona.name}'s pain points`);
+            setTimeout(() => setAutoGenMsg(""), 8000);
+          }
         }
       }
 
@@ -1818,6 +2025,59 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
     setPersonaProfiles(prev => prev.filter(p => p.id !== personaId));
     const stats = await getKnowledgeBaseStats();
     setKbStats(stats);
+  };
+
+  // ── Question Cleanup ──
+  const handleQuestionCleanup = async () => {
+    if (questions.length === 0) return;
+    setCleanupLoading(true);
+    setCleanupPreview(null);
+    try {
+      const qList = questions.map((q, i) => `${i + 1}. [ID:${q.id}] [${q.persona?.toUpperCase() || "?"}] [${q.stage || "?"}] ${q.query}`).join("\n");
+      const result = await callClaudeFast(QUESTION_CLEANUP_PROMPT, `QUESTION BANK (${questions.length} questions):\n\n${qList}`, 4000);
+      setCleanupPreview(result);
+    } catch (e) {
+      console.warn("[Cleanup]", e.message);
+    }
+    setCleanupLoading(false);
+  };
+
+  const applyCleanup = async () => {
+    if (!cleanupPreview?.groups?.length) return;
+    const removeIds = new Set(cleanupPreview.groups.flatMap(g => g.remove.map(r => r.id)));
+    const removedQs = questions.filter(q => removeIds.has(q.id));
+    const kept = questions.filter(q => !removeIds.has(q.id));
+
+    // 1. Update pipeline state (in-memory + debounced file save via PipelineContext)
+    updateModule("m1", { questions: kept });
+
+    // 2. Update in-memory question states so UI reflects change immediately
+    setAiQuestions(prev => prev.filter(q => !removeIds.has(q.id)));
+    setKbQuestions(prev => prev.filter(q => !removeIds.has(q.id)));
+    setPersonaGeneratedQs(prev => {
+      const updated = {};
+      Object.entries(prev).forEach(([pid, qs]) => {
+        const remaining = qs.filter(q => !removeIds.has(q.id));
+        if (remaining.length > 0) updated[pid] = remaining;
+      });
+      return updated;
+    });
+
+    // 3. Delete removed questions from IndexedDB (saveQuestions only puts — never deletes)
+    const removeIdList = removedQs.map(q => q.id).filter(Boolean);
+    await deleteQuestions(removeIdList);
+
+    // 4. Re-save kept list so IndexedDB is consistent
+    await saveQuestions(kept);
+
+    // 5. Delete removed questions from file store so they don't re-hydrate on next reload
+    // File store keys are dedupHashes (base36), not question IDs — compute if needed
+    removedQs.forEach(q => {
+      const fileKey = q.dedupHash || (q.query ? questionHash(q.query) : null);
+      if (fileKey) db.delete("m1_questions_v2", fileKey).catch(() => {});
+    });
+
+    setCleanupPreview(null);
   };
 
   // ── Toggles ──
@@ -1850,10 +2110,16 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
       persona: q.persona,  // keep as id (gc/cpo/etc), not label — label lookup on read
       stage: q.stage,
       query: q.query,
-      cw: q.cluster,
+      cluster: q.cluster,
       source: q.source,
       classification: q.classification,
       lifecycle: q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack",
+      intentType: q.intentType || null,
+      personaFit: q.personaFit != null ? q.personaFit : null,
+      bestPersona: q.bestPersona || null,
+      volumeTier: q.volumeTier || null,
+      criterion: q.criterion || null,
+      enrichedAt: q.enrichedAt || null,
     }));
     updateModule("m1", {
       questions: exportQs,
@@ -1918,6 +2184,190 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
   });
 
   const companyPersonas = personaProfiles.filter(p => p.company.toLowerCase() === company.toLowerCase());
+
+  // ── Find Similar Decision Makers ──
+  const handleFindSimilar = async (personaId) => {
+    const persona = personaProfiles.find(p => p.id === personaId);
+    if (!persona) return;
+    setFindSimilarId(personaId);
+    setFindSimilarLoading(true);
+    setFindSimilarResults(prev => ({ ...prev, [personaId]: [] }));
+    try {
+      const userMsg = `SOURCE DECISION MAKER:
+Name: ${persona.name} | Title: ${persona.title} | Company: ${persona.company}
+URL: ${persona.companyUrl || ""} | Industry: ${industry} | Location: ${persona.location || "Unknown"}
+CLM Readiness: ${persona.clmReadiness != null ? persona.clmReadiness + "/10" : "Unknown"}
+
+SUMMARY: ${persona.researchSummary || "N/A"}
+WEB SIGNALS: ${(persona.webFindings || []).slice(0, 5).join(" | ") || "None"}
+PAIN POINTS: ${(persona.painPoints || []).slice(0, 3).map(pp => pp.pain).join("; ") || "None"}
+
+Find 8-10 decision makers at companies similar to ${persona.company}. Cover different CLM buyer roles.`;
+      const result = await callClaude(FIND_SIMILAR_PROMPT, userMsg, 60000);
+      setFindSimilarResults(prev => ({ ...prev, [personaId]: result.suggestions || [] }));
+    } catch (e) {
+      console.warn("[FindSimilar]", e.message);
+    }
+    setFindSimilarLoading(false);
+  };
+
+  // ── Import + auto-research a single row from Find Similar results ──
+  const handleSimilarRowImport = async (rowKey, pasteText, suggestion) => {
+    setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], loading: true, error: null, step: "Parsing\u2026" } }));
+    try {
+      const now = new Date().toISOString();
+      let cleaned = null;
+      if (pasteText && pasteText.trim().length > 50) {
+        cleaned = await callClaudeFast(LINKEDIN_CLEANUP_PROMPT, pasteText.trim(), 8000);
+      }
+      const name = cleaned?.name || suggestion.name;
+      const title = cleaned?.title || suggestion.title;
+      const coName = cleaned?.company || suggestion.company;
+      const pid = `persona-${coName.toLowerCase().replace(/\s+/g, "-")}-${name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`;
+      const persona = {
+        id: pid, personaType: detectPersonaType(title), name, title,
+        company: coName, companyUrl: cleaned?.companyUrl || suggestion.companyUrl || "",
+        location: cleaned?.location || suggestion.location || "",
+        linkedinUrl: cleaned?.linkedinUrl || suggestion.linkedinUrl || "",
+        headline: cleaned?.headline || "", about: cleaned?.about || "",
+        experience: cleaned?.experience || [], education: cleaned?.education || [],
+        skillsTop: cleaned?.skillsTop || [], rawLinkedinText: pasteText || "",
+        cleanedProfile: cleaned, source: pasteText ? "linkedin-paste" : "find-similar",
+        createdAt: now, updatedAt: now, researchedAt: null,
+      };
+      await savePersona(persona);
+      db.saveWithId("m1_personas", pid, persona).catch(() => {});
+      setPersonaProfiles(prev => [persona, ...prev]);
+
+      setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], step: "Researching\u2026" } }));
+      const ctx = cleaned
+        ? `Name: ${name}\nTitle: ${title}\nCompany: ${coName}\nAbout: ${cleaned.about || ""}\nExperience: ${(cleaned.experience || []).slice(0, 2).map(e => `${e.title || ""} at ${e.company || ""}`).join("; ")}`
+        : `Name: ${name}\nTitle: ${title}\nCompany: ${coName}\nLocation: ${suggestion.location || ""}\nCLM Signals: ${suggestion.clmSignals || ""}`;
+      const res = await callClaude(PERSONA_RESEARCH_PROMPT, ctx, 90000);
+      const updates = {
+        researchSummary: res.researchSummary || "", psycheProfile: res.psycheProfile || null,
+        painPoints: res.painPoints || [], priorities: res.priorities || [],
+        clmReadiness: res.clmReadiness || null, webFindings: res.webFindings || [],
+        researchedAt: now,
+      };
+      await updatePersona(pid, updates);
+      db.saveWithId("m1_personas", pid, { ...persona, ...updates }).catch(() => {});
+      setPersonaProfiles(prev => prev.map(p => p.id === pid ? { ...p, ...updates } : p));
+      setCreditsUsed(prev => prev + 0.09);
+
+      // Auto-generate questions from pain points (same as Research flow)
+      if (updates.painPoints && updates.painPoints.length > 0) {
+        setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], step: "Generating questions\u2026" } }));
+        try {
+          const fullPersona = { ...persona, ...updates };
+          const autoQs = await generateQuestionsFromPainPoints(fullPersona);
+          if (autoQs.length > 0) {
+            setPersonaGeneratedQs(prev => ({ ...prev, [pid]: autoQs }));
+          }
+        } catch (qErr) {
+          console.warn("[SimilarRowImport] question gen failed:", qErr.message);
+        }
+      }
+
+      setSimilarRowStates(prev => ({ ...prev, [rowKey]: { expanded: false, loading: false, done: true, error: null } }));
+    } catch (e) {
+      setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], loading: false, error: e.message } }));
+    }
+  };
+
+  // ── Auto-grade Sirion scores from M2 scan results ──
+  // Matches scan results to criteria via: (1) question criterion tag, (2) query text match, (3) per-persona average fallback.
+  const handleAutoGrade = async () => {
+    setAutoGrading(true);
+    try {
+      const scanResults = await db.getAllPaginated("m2_scan_results");
+      if (scanResults.length === 0) { setAutoGrading(false); return; }
+
+      // Normalize persona labels to IDs
+      const LABEL_TO_ID = {
+        "general counsel": "gc", "gc": "gc",
+        "chief procurement officer": "cpo", "cpo": "cpo",
+        "chief information officer": "cio", "cio": "cio",
+        "vp legal operations": "vplo", "vplo": "vplo", "vp legal ops": "vplo",
+        "vp it / cto": "cto", "cto": "cto",
+        "contract manager": "cm", "cm": "cm",
+        "procurement director": "pd", "pd": "pd",
+        "cfo": "cfo", "chief financial officer": "cfo",
+      };
+
+      // Build: queryText → avg positioning, persona → [positioning scores]
+      const queryScore = {};
+      const personaScoreList = {};
+
+      scanResults.forEach(r => {
+        if (!r.analyses) return;
+        const positions = Object.values(r.analyses)
+          .filter(a => a && !a._error && typeof a.positioning === "number" && a.positioning > 0)
+          .map(a => a.positioning);
+        if (positions.length === 0) return;
+        const avg = positions.reduce((s, p) => s + p, 0) / positions.length;
+
+        if (r.query) queryScore[r.query.toLowerCase().trim()] = avg;
+
+        const pid = LABEL_TO_ID[(r.persona || "").toLowerCase().trim()];
+        if (pid) {
+          if (!personaScoreList[pid]) personaScoreList[pid] = [];
+          personaScoreList[pid].push(avg);
+        }
+      });
+
+      // Per-persona average (fallback when no question-level match)
+      const personaAvg = {};
+      Object.keys(personaScoreList).forEach(pid => {
+        const arr = personaScoreList[pid];
+        personaAvg[pid] = arr.reduce((s, v) => s + v, 0) / arr.length;
+      });
+
+      const newScores = { ...decisionScores };
+      let scoredCount = 0;
+
+      PERSONAS.forEach(persona => {
+        (DECISION_CRITERIA[persona.id] || []).forEach(c => {
+          const key = `${persona.id}.${c.id}`;
+
+          // Try 1: questions tagged with this criterion key → match their query text to scan results
+          const taggedQs = questions.filter(q => q.criterion === key);
+          if (taggedQs.length > 0) {
+            const scores = taggedQs.map(q => queryScore[q.query?.toLowerCase().trim()]).filter(s => s != null);
+            if (scores.length > 0) {
+              newScores[key] = Math.max(1, Math.min(10, Math.round(scores.reduce((s, v) => s + v, 0) / scores.length)));
+              scoredCount++;
+              return;
+            }
+          }
+
+          // Try 2: all questions for this persona → match their query text to scan results
+          const personaQs = questions.filter(q => q.persona === persona.id);
+          if (personaQs.length > 0) {
+            const scores = personaQs.map(q => queryScore[q.query?.toLowerCase().trim()]).filter(s => s != null);
+            if (scores.length > 0) {
+              newScores[key] = Math.max(1, Math.min(10, Math.round(scores.reduce((s, v) => s + v, 0) / scores.length)));
+              scoredCount++;
+              return;
+            }
+          }
+
+          // Try 3: persona-level average from scan results
+          if (personaAvg[persona.id] != null) {
+            newScores[key] = Math.max(1, Math.min(10, Math.round(personaAvg[persona.id])));
+            scoredCount++;
+          }
+        });
+      });
+
+      setDecisionScores(newScores);
+      try { localStorage.setItem("xt_decision_scores", JSON.stringify(newScores)); } catch {}
+      setAutoGradeSource({ scoredAt: new Date().toLocaleTimeString(), count: scoredCount });
+    } catch (e) {
+      console.warn("[AutoGrade] failed:", e.message);
+    }
+    setAutoGrading(false);
+  };
 
   return (
     <div style={{ maxWidth: 1000 }}>
@@ -2388,16 +2838,52 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: t.border, borderRadius: 10, overflow: "hidden" }}>
-                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => (
-                    <div key={p.id} style={{ background: t.bgCard, padding: 12, textAlign: "center" }}>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: t.client, fontFamily: "var(--mono)" }}>
-                        {personaCount[p.id] || 0}
+                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => {
+                    const profilesWithQs = personaProfiles
+                      .filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0)
+                      .sort((a, b) => (profileQuestionCount[b.id] || 0) - (profileQuestionCount[a.id] || 0));
+                    const isActive = filterPersona === p.id;
+                    return (
+                      <div key={p.id}
+                        onClick={() => setFilterPersona(isActive ? "all" : p.id)}
+                        style={{
+                          background: isActive ? t.brand + "10" : t.bgCard,
+                          padding: 12, textAlign: "center", cursor: "pointer",
+                          outline: isActive ? `1px solid ${t.brand}40` : "none",
+                          transition: "background 0.15s",
+                        }}>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: isActive ? t.brand : t.client, fontFamily: "var(--mono)" }}>
+                          {personaCount[p.id] || 0}
+                        </div>
+                        <div style={{ fontSize: 11, color: isActive ? t.brand : t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)" }}>
+                          {p.short}
+                        </div>
+                        {profilesWithQs.length > 0 && (
+                          <div style={{ marginTop: 5, borderTop: `1px solid ${t.border}`, paddingTop: 5 }}>
+                            {profilesWithQs.slice(0, 3).map(pp => (
+                              <div key={pp.id}
+                                onClick={e => { e.stopPropagation(); setFilterPersona(filterPersona === pp.id ? "all" : pp.id); }}
+                                style={{
+                                  fontSize: 9, lineHeight: 1.7, cursor: "pointer",
+                                  color: filterPersona === pp.id ? t.brand : t.textGhost,
+                                  background: filterPersona === pp.id ? t.brand + "10" : "transparent",
+                                  borderRadius: 3, padding: "0 3px",
+                                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                                  fontFamily: "var(--mono)",
+                                }}>
+                                {pp.name.split(" ")[0]} ({profileQuestionCount[pp.id]})
+                              </div>
+                            ))}
+                            {profilesWithQs.length > 3 && (
+                              <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                                +{profilesWithQs.length - 3} more
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <div style={{ fontSize: 11, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)" }}>
-                        {p.short}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2412,7 +2898,22 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                 <select value={filterPersona} onChange={e => setFilterPersona(e.target.value)}
                   style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
                   <option value="all">All Personas</option>
-                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => <option key={p.id} value={p.id}>{p.label} ({personaCount[p.id] || 0})</option>)}
+                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => {
+                    const profilesWithQs = personaProfiles.filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0);
+                    if (profilesWithQs.length === 0) {
+                      return <option key={p.id} value={p.id}>{p.label} ({personaCount[p.id] || 0})</option>;
+                    }
+                    return (
+                      <optgroup key={p.id} label={`${p.label} (${personaCount[p.id] || 0})`}>
+                        <option value={p.id}>All {p.short} questions</option>
+                        {profilesWithQs.map(pp => (
+                          <option key={pp.id} value={pp.id}>
+                            {pp.name} · {pp.company} ({profileQuestionCount[pp.id]})
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
                 </select>
 
                 <select value={filterLifecycle} onChange={e => setFilterLifecycle(e.target.value)}
@@ -2454,10 +2955,10 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                 <div style={{ flex: 1 }} />
 
                 <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                  {selectedQs.size} / {filtered.length} selected
+                  {displayQuestions.filter(q => selectedQs.has(q.id)).length} / {displayQuestions.length} selected
                 </span>
 
-                <button onClick={() => setSelectedQs(new Set(filtered.map(q => q.id)))}
+                <button onClick={() => setSelectedQs(new Set(displayQuestions.map(q => q.id)))}
                   style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
                   Select All
                 </button>
@@ -2477,7 +2978,67 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                   }}>
                   {exportCopied ? "\u2713 Synced to M2" : "\u21BB Sync to M2"}
                 </button>
+
+                <button onClick={handleQuestionCleanup} disabled={cleanupLoading || questions.length === 0}
+                  style={{
+                    padding: "6px 12px", borderRadius: 6,
+                    border: "1px solid rgba(251,191,36,0.3)",
+                    background: cleanupPreview ? "rgba(251,191,36,0.1)" : "transparent",
+                    color: "#fbbf24", fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)",
+                    opacity: cleanupLoading || questions.length === 0 ? 0.5 : 1,
+                  }}>
+                  {cleanupLoading ? "Analyzing\u2026" : "\u2728 Cleanup"}
+                </button>
               </div>
+
+              {/* Cleanup Preview Panel */}
+              {cleanupPreview && (
+                <div style={{ margin: "12px 0", padding: "14px 16px", borderRadius: 8, border: "1px solid rgba(251,191,36,0.25)", background: "rgba(251,191,36,0.04)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", fontFamily: "var(--mono)" }}>
+                        CLEANUP PREVIEW
+                      </span>
+                      {cleanupPreview.summary && (
+                        <span style={{ fontSize: 11, color: t.textSec, marginLeft: 10 }}>{cleanupPreview.summary}</span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => setCleanupPreview(null)}
+                        style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
+                        Cancel
+                      </button>
+                      {cleanupPreview.groups?.length > 0 && (
+                        <button onClick={applyCleanup}
+                          style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid rgba(251,191,36,0.4)", background: "rgba(251,191,36,0.1)", color: "#fbbf24", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)" }}>
+                          Remove {cleanupPreview.totalRemoved || 0} Duplicates
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {cleanupPreview.groups?.length === 0 ? (
+                    <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>No duplicates found — your question bank is clean.</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 300, overflowY: "auto" }}>
+                      {cleanupPreview.groups.map((g, gi) => (
+                        <div key={gi} style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${t.border}`, background: t.bgCard }}>
+                          <div style={{ fontSize: 11, color: "#4ade80", marginBottom: 4 }}>
+                            <span style={{ fontFamily: "var(--mono)", fontWeight: 700, marginRight: 6 }}>KEEP:</span>
+                            {g.keep.query}
+                            {g.keep.reason && <span style={{ color: t.textGhost, fontStyle: "italic", marginLeft: 6 }}>— {g.keep.reason}</span>}
+                          </div>
+                          {g.remove.map((r, ri) => (
+                            <div key={ri} style={{ fontSize: 11, color: "#f87171", paddingLeft: 8, marginTop: 2 }}>
+                              <span style={{ fontFamily: "var(--mono)", marginRight: 6 }}>\u2715</span>
+                              {r.query}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Questions Table */}
               <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -2498,7 +3059,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((q, i) => {
+                    {displayQuestions.map((q, i) => {
                       const persona = PERSONAS.find(p => p.id === q.persona);
                       const stage = STAGES.find(s => s.id === q.stage);
                       const sel = selectedQs.has(q.id);
@@ -2652,6 +3213,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
       {/* ═══════════════════════════════════════════════════ */}
       {/* TAB: DECISION MATRIX                              */}
       {/* ═══════════════════════════════════════════════════ */}
+      {/* NOTE: handleAutoGrade defined inline below in JSX via useCallback-like pattern */}
       {activeTab === "matrix" && (
         <div>
           <div style={{ marginBottom: 24 }}>
@@ -2686,7 +3248,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             const enrichedCount = qForPersona.filter(q => q.personaFit != null).length;
 
             return (
-              <div>
+              <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                 {/* Summary bar */}
                 <div style={{
                   display: "flex", gap: 20, padding: "12px 18px", marginBottom: 16,
@@ -2717,27 +3280,56 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                       Criteria
                     </div>
                   </div>
-                  {/* Overall score */}
-                  {(() => {
-                    const scored = criteria.filter(c => decisionScores[`${activeMatrixPersona}.${c.id}`] != null);
-                    if (scored.length === 0) return null;
-                    const weightedSum = scored.reduce((s, c) => s + (decisionScores[`${activeMatrixPersona}.${c.id}`] * c.weight), 0);
-                    const maxSum = scored.reduce((s, c) => s + (10 * c.weight), 0);
-                    const pct = Math.round((weightedSum / maxSum) * 100);
-                    return (
-                      <div style={{ marginLeft: "auto" }}>
-                        <div style={{
-                          fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
-                          color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171",
-                        }}>
-                          {pct}%
+                  {/* Overall score + auto-grade button */}
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+                    {/* Auto-grade button */}
+                    <div style={{ textAlign: "right" }}>
+                      <button
+                        onClick={handleAutoGrade}
+                        disabled={autoGrading}
+                        title="Auto-score every criterion using your M2 scan results — no manual input needed"
+                        style={{
+                          padding: "7px 14px", borderRadius: 8, border: `1px solid ${t.brand}50`,
+                          background: autoGrading ? t.brand + "20" : t.brand + "12",
+                          color: t.brand, fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
+                          cursor: autoGrading ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                        }}
+                      >
+                        {autoGrading ? "⏳ Grading…" : "✨ AI Auto-Grade"}
+                      </button>
+                      {autoGradeSource && (
+                        <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                          {autoGradeSource.count} criteria scored · {autoGradeSource.scoredAt}
                         </div>
-                        <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
-                          Weighted Score
+                      )}
+                      {!autoGradeSource && (
+                        <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                          Uses your M2 scan data
                         </div>
-                      </div>
-                    );
-                  })()}
+                      )}
+                    </div>
+                    {/* Weighted score */}
+                    {(() => {
+                      const scored = criteria.filter(c => decisionScores[`${activeMatrixPersona}.${c.id}`] != null);
+                      if (scored.length === 0) return null;
+                      const weightedSum = scored.reduce((s, c) => s + (decisionScores[`${activeMatrixPersona}.${c.id}`] * c.weight), 0);
+                      const maxSum = scored.reduce((s, c) => s + (10 * c.weight), 0);
+                      const pct = Math.round((weightedSum / maxSum) * 100);
+                      return (
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{
+                            fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
+                            color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171",
+                          }}>
+                            {pct}%
+                          </div>
+                          <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                            Weighted Score
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
 
                 <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -2759,8 +3351,11 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                         const gap = score != null ? Math.max(0, c.weight - score) : null;
                         const gapColor = gap == null ? t.textGhost : gap <= 1 ? "#4ade80" : gap <= 3 ? "#fbbf24" : "#f87171";
 
+                        const isExpanded = expandedCriterion === key;
+                        const criterionQs = questions.filter(q => q.criterion === key);
                         return (
-                          <tr key={c.id} style={{ borderBottom: `1px solid ${t.border}`, transition: "background 0.1s" }}
+                          <Fragment key={c.id}>
+                          <tr style={{ borderBottom: isExpanded ? "none" : `1px solid ${t.border}`, transition: "background 0.1s" }}
                             onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
                             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                             <td style={{ padding: "12px 16px", color: t.text, fontWeight: 500, lineHeight: 1.4 }}>
@@ -2782,15 +3377,28 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                               </div>
                             </td>
                             <td style={{ padding: "12px 8px", textAlign: "center" }}>
-                              <span style={{
-                                fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
-                                color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171",
-                              }}>
-                                {qCount}
-                              </span>
-                              {qCount === 0 && (
-                                <div style={{ fontSize: 9, color: "#f87171", fontFamily: "var(--mono)" }}>no coverage</div>
-                              )}
+                              <button
+                                onClick={() => setExpandedCriterion(isExpanded ? null : key)}
+                                title={qCount > 0 ? "Click to see questions" : "No questions yet"}
+                                style={{
+                                  background: "none", border: "none", cursor: qCount > 0 ? "pointer" : "default",
+                                  padding: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                                }}
+                              >
+                                <span style={{
+                                  fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                  color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171",
+                                  textDecoration: qCount > 0 ? "underline dotted" : "none",
+                                }}>
+                                  {qCount}
+                                </span>
+                                {qCount === 0 && (
+                                  <div style={{ fontSize: 9, color: "#f87171", fontFamily: "var(--mono)" }}>no coverage</div>
+                                )}
+                                {qCount > 0 && (
+                                  <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>{isExpanded ? "▲ hide" : "▼ show"}</div>
+                                )}
+                              </button>
                             </td>
                             <td style={{ padding: "12px 8px", textAlign: "center" }}>
                               <input
@@ -2799,10 +3407,11 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                                 placeholder="—"
                                 onChange={e => {
                                   const v = parseInt(e.target.value);
-                                  setDecisionScores(prev => ({
-                                    ...prev,
-                                    [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)),
-                                  }));
+                                  setDecisionScores(prev => {
+                                    const next = { ...prev, [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)) };
+                                    try { localStorage.setItem("xt_decision_scores", JSON.stringify(next)); } catch {}
+                                    return next;
+                                  });
                                 }}
                                 style={{
                                   width: 48, padding: "4px 6px", borderRadius: 6, textAlign: "center",
@@ -2826,6 +3435,33 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                               )}
                             </td>
                           </tr>
+                          {isExpanded && criterionQs.length > 0 && (
+                            <tr style={{ borderBottom: `1px solid ${t.border}` }}>
+                              <td colSpan={5} style={{ padding: "0 16px 14px", background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 8 }}>
+                                  {criterionQs.map((q, i) => (
+                                    <div key={q.id || i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 12px", borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
+                                      <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", minWidth: 20, paddingTop: 1 }}>{i + 1}.</span>
+                                      <span style={{ fontSize: 13, color: t.text, lineHeight: 1.5, flex: 1 }}>{q.query}</span>
+                                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                                        {q.stage && (
+                                          <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textSec, background: t.border + "60", borderRadius: 4, padding: "2px 6px" }}>
+                                            {q.stage}
+                                          </span>
+                                        )}
+                                        {q.classification && (
+                                          <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: q.classification === "macro" ? "#67e8f9" : t.brand, background: (q.classification === "macro" ? "#67e8f9" : t.brand) + "18", borderRadius: 4, padding: "2px 6px" }}>
+                                            {q.classification}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                          </Fragment>
                         );
                       })}
                     </tbody>
@@ -2842,6 +3478,43 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                     Scores saved in session. Question coverage auto-populates after generation.
                   </span>
                 </div>
+                </div>{/* end main column */}
+
+                {/* ── CEO / CMO Plain-English Guide ── */}
+                <div style={{
+                  width: 212, flexShrink: 0, background: t.bgCard,
+                  border: `1px solid ${t.brand}30`, borderRadius: 10,
+                  padding: "16px 14px", position: "sticky", top: 16,
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 14, fontFamily: "var(--mono)" }}>
+                    How to read this
+                  </div>
+
+                  {[
+                    { icon: "👤", title: "Persona tabs", body: "Pick the buyer role — GC, CFO, CPO… Each person cares about different things." },
+                    { icon: "🔴", title: "Priority dots", body: "How much this topic matters to that buyer. Red = must-win. Yellow = important." },
+                    { icon: "#", title: "Questions", body: "How many of your 182 questions cover this topic. Zero means no content → Sirion is invisible here." },
+                    { icon: "✏️", title: "Sirion Score", body: "You rate Sirion 1–10 on this topic. Be honest — low scores reveal real gaps." },
+                    { icon: "⚡", title: "Gap", body: "Priority minus your score. A -7 gap means buyers care deeply but Sirion doesn't show up. Fix these first." },
+                  ].map(({ icon, title, body }) => (
+                    <div key={title} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${t.border}` }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 3 }}>
+                        {icon} {title}
+                      </div>
+                      <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.6 }}>{body}</div>
+                    </div>
+                  ))}
+
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: t.brand + "10", border: `1px solid ${t.brand}25`, marginTop: 2 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: t.brand, marginBottom: 5 }}>Bottom line</div>
+                    <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.6 }}>
+                      The <strong style={{ color: t.text }}>Weighted Score %</strong> at top right tells you at a glance how well Sirion is positioned for this buyer.
+                      <br /><br />
+                      <span style={{ color: "#f87171", fontWeight: 700 }}>Under 40%</span> = urgent. Content gaps are costing you deals.
+                    </div>
+                  </div>
+                </div>
+
               </div>
             );
           })()}
@@ -2868,7 +3541,6 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
             {[
               { id: "linkedin", label: "LinkedIn Paste", icon: "in" },
               { id: "csv", label: "Bulk CSV Import", icon: "\uD83D\uDCC1" },
-              { id: "web", label: "AI Web Research", icon: "\uD83D\uDD0D" },
             ].map(m => (
               <button key={m.id} onClick={() => setImportMode(m.id)} style={{
                 flex: 1, padding: "14px 16px", borderRadius: 10, cursor: "pointer",
@@ -2976,39 +3648,6 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
           )}
 
           {/* AI Web Research Mode */}
-          {importMode === "web" && (
-            <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 20, marginBottom: 24 }}>
-              <label style={label}>AI Web Research (No LinkedIn Needed)</label>
-              <p style={{ fontSize: 11, color: t.textDim, margin: "0 0 12px", lineHeight: 1.6 }}>
-                Enter the decision maker's name, title, and company. Claude will search the web and build a psyche profile automatically.
-              </p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <div>
-                  <label style={{ ...label, fontSize: 11 }}>Full Name *</label>
-                  <input style={inp} value={webResearchName} onChange={e => setWebResearchName(e.target.value)} placeholder="e.g. John Doe" />
-                </div>
-                <div>
-                  <label style={{ ...label, fontSize: 11 }}>Title *</label>
-                  <input style={inp} value={webResearchTitle} onChange={e => setWebResearchTitle(e.target.value)} placeholder="e.g. Chief Procurement Officer" />
-                </div>
-              </div>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ ...label, fontSize: 11 }}>Company (defaults to {company})</label>
-                <input style={inp} value={webResearchCompany} onChange={e => setWebResearchCompany(e.target.value)} placeholder={company} />
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <button onClick={handleWebResearchImport} disabled={importLoading || !webResearchName.trim() || !webResearchTitle.trim()}
-                  style={{
-                    background: t.btnBg, color: t.btnText, border: "none", borderRadius: 8,
-                    padding: "10px 24px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                    fontFamily: "var(--mono)", opacity: (importLoading || !webResearchName.trim() || !webResearchTitle.trim()) ? 0.4 : 1,
-                  }}>
-                  {importLoading ? "Researching\u2026" : "\uD83D\uDD0D Research & Import"}
-                </button>
-                <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>~$0.08 (includes web search)</span>
-              </div>
-            </div>
-          )}
 
           {/* Loading indicator for import */}
           {importLoading && (
@@ -3019,7 +3658,7 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: t.brand, animation: "pulse 1.5s ease-in-out infinite" }} />
                 <span style={{ fontSize: 11, fontWeight: 600, color: t.brand, fontFamily: "var(--mono)" }}>
-                  {importMode === "web" ? "AI researching decision maker\u2026" : "Processing profile\u2026"}
+                  {"Processing profile\u2026"}
                 </span>
               </div>
             </div>
@@ -3050,7 +3689,8 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                 const pType = PERSONAS.find(pp => pp.id === p.personaType);
                 const isResearching = researchingId === p.id;
                 return (
-                  <div key={p.id} style={{
+                  <Fragment key={p.id}>
+                  <div style={{
                     background: t.bgCard, borderTop: `1px solid ${t.border}`, borderRight: `1px solid ${t.border}`, borderBottom: `1px solid ${t.border}`, borderRadius: 10,
                     padding: 16, transition: "border-color 0.2s",
                     borderLeft: p.researchedAt ? "3px solid #a78bfa" : p.m4AnalyzedAt ? "3px solid #4ade80" : `3px solid ${t.border}`,
@@ -3150,6 +3790,20 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                             {isResearching ? "Researching\u2026" : "\uD83D\uDD04 Re-research"}
                           </button>
                         )}
+                        {p.researchedAt && (
+                          <button
+                            onClick={() => findSimilarId === p.id ? setFindSimilarId(null) : handleFindSimilar(p.id)}
+                            disabled={findSimilarLoading && findSimilarId === p.id}
+                            style={{
+                              padding: "6px 12px", borderRadius: 6,
+                              border: "1px solid rgba(52,211,153,0.3)",
+                              background: findSimilarId === p.id ? "rgba(52,211,153,0.12)" : "rgba(52,211,153,0.06)",
+                              color: "#34d399", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)",
+                              opacity: findSimilarLoading && findSimilarId === p.id ? 0.7 : 1,
+                            }}>
+                            {findSimilarLoading && findSimilarId === p.id ? "Finding\u2026" : findSimilarId === p.id ? "\u25B2 Hide" : "\uD83C\uDF10 Find Similar"}
+                          </button>
+                        )}
                         <button onClick={() => handleDeletePersona(p.id)}
                           style={{
                             padding: "6px 12px", borderRadius: 6, border: `1px solid rgba(239,68,68,0.2)`,
@@ -3171,7 +3825,164 @@ Generate 5 buyer-intent questions from these pain points. Each question must ref
                         </div>
                       </div>
                     )}
+                    {/* Generated questions inline panel */}
+                    {personaGeneratedQs[p.id]?.length > 0 && (
+                      <div style={{ marginTop: 10, borderRadius: 6, border: `1px solid rgba(139,92,246,0.2)`, background: "rgba(139,92,246,0.04)", padding: "10px 12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#a78bfa", fontFamily: "var(--mono)", letterSpacing: 1 }}>
+                            GENERATED QUESTIONS ({personaGeneratedQs[p.id].length})
+                          </span>
+                          <button
+                            onClick={() => {
+                              setFilterPersona(p.id);
+                              setActiveTab("questions");
+                              if (!generated) handleGenerate();
+                            }}
+                            style={{ fontSize: 10, color: "#a78bfa", background: "none", border: "none", cursor: "pointer", fontFamily: "var(--mono)", textDecoration: "underline" }}>
+                            View in Bank \u2197
+                          </button>
+                        </div>
+                        {personaGeneratedQs[p.id].map((q, qi) => (
+                          <div key={q.id} style={{ fontSize: 11, color: t.textSec, padding: "3px 0", borderTop: qi > 0 ? `1px solid ${t.border}` : "none", lineHeight: 1.5 }}>
+                            <span style={{ color: t.textGhost, fontFamily: "var(--mono)", marginRight: 6 }}>{qi + 1}.</span>
+                            {q.query}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                  {/* Find Similar Panel */}
+                  {findSimilarId === p.id && (
+                    <div style={{
+                      marginTop: 2, borderRadius: 8, border: `1px solid rgba(52,211,153,0.2)`,
+                      background: "rgba(52,211,153,0.03)", padding: "14px 16px",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#34d399", fontFamily: "var(--mono)", letterSpacing: 1 }}>
+                          SIMILAR DECISION MAKERS
+                        </div>
+                        {findSimilarLoading && (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#34d399", animation: "pulse 1.5s ease-in-out infinite" }} />
+                            <span style={{ fontSize: 10, color: "#34d399", fontFamily: "var(--mono)" }}>Searching web\u2026</span>
+                          </div>
+                        )}
+                      </div>
+                      {/* Results */}
+                      {(findSimilarResults[p.id] || []).length === 0 && !findSimilarLoading && (
+                        <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", textAlign: "center", padding: "16px 0" }}>
+                          No results yet — click Find Similar to search
+                        </div>
+                      )}
+                      {(findSimilarResults[p.id] || []).map((sug, si) => {
+                        const rowKey = `${p.id}__${si}`;
+                        const rowState = similarRowStates[rowKey] || {};
+                        const confidenceColor = sug.confidence >= 0.8 ? "#34d399" : sug.confidence >= 0.6 ? "#fbbf24" : "#f87171";
+                        const personaBadgeMap = { gc: "GC", cpo: "CPO", cio: "CIO", cfo: "CFO", cto: "CTO", vp_legal_ops: "VPLO", contract_manager: "CM", procurement: "PROC" };
+                        const badge = personaBadgeMap[sug.personaType] || sug.personaType?.toUpperCase()?.slice(0, 4) || "?";
+                        return (
+                          <div key={rowKey} style={{
+                            borderBottom: si < (findSimilarResults[p.id].length - 1) ? `1px solid rgba(52,211,153,0.1)` : "none",
+                            paddingBottom: 10, marginBottom: 10,
+                          }}>
+                            {/* Row header */}
+                            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: t.textPri }}>{sug.name}</span>
+                                  <span style={{
+                                    fontSize: 9, fontWeight: 700, color: "#34d399", fontFamily: "var(--mono)",
+                                    background: "rgba(52,211,153,0.1)", borderRadius: 3, padding: "1px 4px",
+                                  }}>{badge}</span>
+                                  <span style={{ fontSize: 10, color: confidenceColor, fontFamily: "var(--mono)" }}>
+                                    {Math.round((sug.confidence || 0) * 100)}%
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: t.textSec, marginTop: 1 }}>
+                                  {sug.title} · {sug.company}
+                                  {sug.location ? ` · ${sug.location}` : ""}
+                                  {sug.companySize ? ` · ${sug.companySize}` : ""}
+                                </div>
+                                {sug.clmSignals && (
+                                  <div style={{ fontSize: 10, color: t.textGhost, marginTop: 2, fontStyle: "italic" }}>
+                                    {sug.clmSignals}
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                                {/* LinkedIn link */}
+                                {sug.linkedinUrl && (
+                                  <a href={sug.linkedinUrl} target="_blank" rel="noopener noreferrer"
+                                    style={{ fontSize: 10, color: "#60a5fa", fontFamily: "var(--mono)", textDecoration: "none" }}>
+                                    LinkedIn \u2197
+                                  </a>
+                                )}
+                                {!sug.linkedinUrl && sug.linkedinSearchUrl && (
+                                  <a href={sug.linkedinSearchUrl} target="_blank" rel="noopener noreferrer"
+                                    style={{ fontSize: 10, color: "#94a3b8", fontFamily: "var(--mono)", textDecoration: "none" }}>
+                                    Search \u2197
+                                  </a>
+                                )}
+                                {/* Import / Done */}
+                                {rowState.done ? (
+                                  <span style={{ fontSize: 10, color: "#34d399", fontFamily: "var(--mono)", fontWeight: 700 }}>✓ IMPORTED</span>
+                                ) : (
+                                  <button
+                                    onClick={() => setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], expanded: !prev[rowKey]?.expanded } }))}
+                                    disabled={rowState.loading}
+                                    style={{
+                                      padding: "3px 8px", borderRadius: 4, border: "1px solid rgba(52,211,153,0.3)",
+                                      background: rowState.expanded ? "rgba(52,211,153,0.12)" : "rgba(52,211,153,0.05)",
+                                      color: "#34d399", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)",
+                                    }}>
+                                    {rowState.loading ? rowState.step || "Working\u2026" : rowState.expanded ? "\u25B2 Close" : "Import \u2193"}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {/* Inline import expand */}
+                            {rowState.expanded && !rowState.done && (
+                              <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
+                                <div style={{ fontSize: 10, color: t.textGhost, marginBottom: 6, fontFamily: "var(--mono)" }}>
+                                  Optional: open LinkedIn \u2192 Select All \u2192 Copy \u2192 paste below (or skip to web-research only)
+                                </div>
+                                <textarea
+                                  value={rowState.paste || ""}
+                                  onChange={e => setSimilarRowStates(prev => ({ ...prev, [rowKey]: { ...prev[rowKey], paste: e.target.value } }))}
+                                  placeholder="Paste LinkedIn profile text here (optional)…"
+                                  rows={3}
+                                  style={{
+                                    width: "100%", padding: "8px 10px", borderRadius: 6,
+                                    border: `1px solid ${t.border}`, background: t.bgMain,
+                                    color: t.textPri, fontSize: 11, fontFamily: "var(--mono)",
+                                    resize: "vertical", boxSizing: "border-box",
+                                  }}
+                                />
+                                {rowState.error && (
+                                  <div style={{ fontSize: 10, color: "#f87171", marginTop: 4, fontFamily: "var(--mono)" }}>
+                                    Error: {rowState.error}
+                                  </div>
+                                )}
+                                <button
+                                  onClick={() => handleSimilarRowImport(rowKey, rowState.paste || "", sug)}
+                                  disabled={rowState.loading}
+                                  style={{
+                                    marginTop: 8, padding: "6px 14px", borderRadius: 6,
+                                    border: "1px solid rgba(52,211,153,0.4)",
+                                    background: "rgba(52,211,153,0.1)", color: "#34d399",
+                                    fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "var(--mono)",
+                                    opacity: rowState.loading ? 0.6 : 1,
+                                  }}>
+                                  {rowState.loading ? (rowState.step || "Working\u2026") : "Parse & Research \u2192"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  </Fragment>
                 );
               })}
             </div>

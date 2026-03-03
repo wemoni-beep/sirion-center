@@ -1,70 +1,19 @@
 /* ═══════════════════════════════════════════
-   SHARED FIREBASE CONFIGURATION & HELPERS
+   LOCAL-ONLY DATA LAYER
+   All reads/writes go to data/ via Vite dev server.
+   Firebase is DISABLED — will be reconnected later
+   when the full pipeline is stable.
    ═══════════════════════════════════════════ */
 
-export const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "sirion-deploy-08480747-ed13b"
-};
-
-export const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
-
-// Convert JS value → Firestore value (flatten deeply nested objects to JSON strings to avoid depth limits)
-export function toFsVal(val, depth = 0) {
-  if (val === null || val === undefined) return { nullValue: null };
-  if (typeof val === "boolean") return { booleanValue: val };
-  if (typeof val === "number") return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
-  if (typeof val === "string") return { stringValue: val.length > 8000 ? val.substring(0, 8000) : val };
-  // For deep objects/arrays: serialize to JSON string to avoid Firestore depth limits
-  if (depth >= 2) return { stringValue: JSON.stringify(val).substring(0, 50000) };
-  if (Array.isArray(val)) {
-    // Firestore allows up to 20000 array elements; serialize large arrays to JSON string
-    if (val.length > 500) return { stringValue: JSON.stringify(val) };
-    return { arrayValue: { values: val.map(v => toFsVal(v, depth + 1)) } };
-  }
-  if (typeof val === "object") {
-    const fields = {};
-    for (const [k, v] of Object.entries(val)) { fields[k] = toFsVal(v, depth + 1); }
-    return { mapValue: { fields } };
-  }
-  return { stringValue: String(val) };
-}
-
-// Convert Firestore value → JS value
-export function fromFsVal(val) {
-  if (!val) return null;
-  if ("nullValue" in val) return null;
-  if ("booleanValue" in val) return val.booleanValue;
-  if ("integerValue" in val) return parseInt(val.integerValue);
-  if ("doubleValue" in val) return val.doubleValue;
-  if ("stringValue" in val) {
-    // Try to parse JSON strings back to objects
-    const s = val.stringValue;
-    if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
-      try { return JSON.parse(s); } catch { return s; }
-    }
-    return s;
-  }
-  if ("arrayValue" in val) return (val.arrayValue.values || []).map(fromFsVal);
-  if ("mapValue" in val) {
-    const obj = {};
-    for (const [k, v] of Object.entries(val.mapValue.fields || {})) { obj[k] = fromFsVal(v); }
-    return obj;
-  }
-  return null;
-}
-
-export function fromFsDoc(doc) {
-  if (!doc?.fields) return null;
-  const obj = {};
-  for (const [k, v] of Object.entries(doc.fields)) { obj[k] = fromFsVal(v); }
-  if (doc.name) obj._id = doc.name.split("/").pop();
-  return obj;
-}
+// Keep these exports so existing imports don't break
+export const FIREBASE_CONFIG = { apiKey: "", projectId: "" };
+export const FS_BASE = "";
+export function toFsVal(val) { return val; }
+export function fromFsVal(val) { return val; }
+export function fromFsDoc(doc) { return doc; }
 
 /* ═══════════════════════════════════════════
-   LOCAL CACHE — localStorage safety net
-   Write-through on every save, fallback on load failure.
+   LOCAL CACHE — localStorage for instant reads
    ═══════════════════════════════════════════ */
 const LC_PREFIX = "xt_";
 
@@ -96,7 +45,11 @@ const localCache = {
         } catch {}
       }
     }
-    return results.sort((a, b) => (b.created_at || b._cachedAt || "").toString().localeCompare((a.created_at || a._cachedAt || "").toString()));
+    return results.sort((a, b) => {
+      const da = a.updated_at || a.created_at || String(a._cachedAt || "");
+      const db_ = b.updated_at || b.created_at || String(b._cachedAt || "");
+      return db_.localeCompare(da);
+    });
   },
   remove(collection, docId) {
     try { localStorage.removeItem(`${LC_PREFIX}${collection}_${docId}`); } catch {}
@@ -126,18 +79,23 @@ const localCache = {
 };
 
 /* ═══════════════════════════════════════════
-   FILE BACKUP — JSON files in project data/ folder
-   Fire-and-forget writes via Vite dev server middleware.
+   FILE STORE — JSON files in data/ folder
+   Primary data store via Vite dev server middleware.
    ═══════════════════════════════════════════ */
-const fileBackup = {
-  save(collection, docId, data) {
-    fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data)
-    }).catch(() => {});
+const fileStore = {
+  async save(collection, docId, data) {
+    try {
+      const res = await fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      return res.ok;
+    } catch { return false; }
   },
-  remove(collection, docId) {
-    fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, { method: "DELETE" }).catch(() => {});
+  async remove(collection, docId) {
+    try {
+      await fetch(`/__api/backup/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`, { method: "DELETE" });
+    } catch {}
   },
   async getAll(collection) {
     try {
@@ -148,7 +106,23 @@ const fileBackup = {
   }
 };
 
-// Firestore DB operations with full error visibility
+/* ═══════════════════════════════════════════
+   REQUEST DEDUP — prevents duplicate concurrent reads
+   ═══════════════════════════════════════════ */
+const _pendingFetches = new Map();
+
+function _dedupFetch(cacheKey, fetchFn) {
+  if (_pendingFetches.has(cacheKey)) return _pendingFetches.get(cacheKey);
+  const p = fetchFn().finally(() => _pendingFetches.delete(cacheKey));
+  _pendingFetches.set(cacheKey, p);
+  return p;
+}
+
+/* ═══════════════════════════════════════════
+   DB — Local-only database operations
+   Same API as before, but reads/writes go to
+   data/ files + localStorage. Zero Firebase calls.
+   ═══════════════════════════════════════════ */
 let _lastDbError = null;
 
 export const db = {
@@ -157,114 +131,73 @@ export const db = {
   async save(collection, data) {
     _lastDbError = null;
     try {
-      const fields = {};
-      for (const [k, v] of Object.entries(data)) { fields[k] = toFsVal(v, 0); }
-      const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields })
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        _lastDbError = `Save failed (${res.status}): ${err.substring(0, 200)}`;
-        console.warn("Firebase:", _lastDbError);
-        const tmpId = "local_" + Date.now();
-        localCache.set(collection, tmpId, data);
-        fileBackup.save(collection, tmpId, data);
-        return null;
-      }
-      const doc = await res.json();
-      const docId = doc.name ? doc.name.split("/").pop() : null;
-      if (docId) { localCache.set(collection, docId, data); fileBackup.save(collection, docId, data); }
+      const docId = "local_" + Date.now();
+      data.created_at = data.created_at || new Date().toISOString();
+      data.updated_at = new Date().toISOString();
+      localCache.set(collection, docId, data);
+      await fileStore.save(collection, docId, data);
       return docId;
     } catch (e) {
       _lastDbError = `Save exception: ${e.message}`;
-      console.warn("Firebase:", _lastDbError);
-      const tmpId = "local_" + Date.now();
-      localCache.set(collection, tmpId, data);
-      fileBackup.save(collection, tmpId, data);
+      console.warn("[db]", _lastDbError);
       return null;
     }
   },
 
   async update(collection, docId, data) {
     _lastDbError = null;
-    localCache.set(collection, docId, data);
-    fileBackup.save(collection, docId, data);
     try {
-      const fields = {};
-      for (const [k, v] of Object.entries(data)) { fields[k] = toFsVal(v, 0); }
-      const updateMask = Object.keys(data).map(k => `updateMask.fieldPaths=${k}`).join("&");
-      const url = `${FS_BASE}/${collection}/${docId}?${updateMask}&key=${FIREBASE_CONFIG.apiKey}`;
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields })
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        _lastDbError = `Update failed (${res.status}): ${err.substring(0, 200)}`;
-        console.warn("Firebase:", _lastDbError);
-        return false;
-      }
+      data.updated_at = new Date().toISOString();
+      localCache.set(collection, docId, data);
+      await fileStore.save(collection, docId, data);
       return true;
     } catch (e) {
       _lastDbError = `Update exception: ${e.message}`;
-      console.warn("Firebase:", _lastDbError);
+      console.warn("[db]", _lastDbError);
       return false;
     }
   },
 
-  // Simple list (no orderBy — avoids index requirement)
   async getAll(collection) {
+    return _dedupFetch(`getAll:${collection}`, () => this._getAllLocal(collection));
+  },
+
+  async _getAllLocal(collection) {
     _lastDbError = null;
     try {
-      const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=50`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        const err = await res.text();
-        _lastDbError = `GetAll failed (${res.status}): ${err.substring(0, 200)}`;
-        console.warn("Firebase:", _lastDbError);
-        // Fallback: localStorage -> file backup
-        const cached = localCache.getAll(collection);
-        if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase failed)`); return cached; }
-        const fileDocs = await fileBackup.getAll(collection);
-        if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (Firebase failed, localStorage empty)`);
-        return fileDocs;
+      // Primary: file store (data/ folder)
+      const docs = await fileStore.getAll(collection);
+      if (docs.length > 0) {
+        docs.sort((a, b) => {
+          const da = a.updated_at || a.created_at || "";
+          const db_ = b.updated_at || b.created_at || "";
+          return db_.localeCompare(da);
+        });
+        // Sync to localStorage for instant subsequent reads
+        docs.forEach(d => { if (d._id) localCache.set(collection, d._id, d); });
+        return docs;
       }
-      const data = await res.json();
-      const docs = (data.documents || []).map(fromFsDoc).filter(Boolean);
-      // Sort client-side by created_at descending
-      docs.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-      // PURGE stale localStorage for this collection, then re-populate with fresh Firebase data
-      localCache.clearCollection(collection);
-      docs.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
-      return docs;
+      // Fallback: localStorage
+      const cached = localCache.getAll(collection);
+      if (cached.length > 0) {
+        console.info(`[db] Serving ${cached.length} docs for '${collection}' from localStorage`);
+        return cached;
+      }
+      return [];
     } catch (e) {
       _lastDbError = `GetAll exception: ${e.message}`;
-      console.warn("Firebase:", _lastDbError);
-      // Fallback: localStorage -> file backup
+      console.warn("[db]", _lastDbError);
       const cached = localCache.getAll(collection);
-      if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`);
-      return fileDocs;
+      if (cached.length > 0) return cached;
+      return [];
     }
   },
 
   async delete(collection, docId) {
     _lastDbError = null;
     try {
-      const url = `${FS_BASE}/${collection}/${docId}?key=${FIREBASE_CONFIG.apiKey}`;
-      const res = await fetch(url, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await res.text();
-        _lastDbError = `Delete failed (${res.status}): ${err.substring(0, 200)}`;
-        return false;
-      }
       localCache.remove(collection, docId);
-      fileBackup.remove(collection, docId);
+      await fileStore.remove(collection, docId);
       return true;
     } catch (e) {
       _lastDbError = `Delete exception: ${e.message}`;
@@ -272,94 +205,31 @@ export const db = {
     }
   },
 
-  // Save or overwrite a document at a known ID (PATCH creates if missing)
   async saveWithId(collection, docId, data) {
     _lastDbError = null;
-    localCache.set(collection, docId, data);
-    fileBackup.save(collection, docId, data);
     try {
-      const fields = {};
-      for (const [k, v] of Object.entries(data)) { fields[k] = toFsVal(v, 0); }
-      const url = `${FS_BASE}/${collection}/${docId}?key=${FIREBASE_CONFIG.apiKey}`;
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields })
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        _lastDbError = `SaveWithId failed (${res.status}): ${err.substring(0, 200)}`;
-        console.warn("Firebase:", _lastDbError);
-        return false;
-      }
+      data.updated_at = new Date().toISOString();
+      localCache.set(collection, docId, data);
+      await fileStore.save(collection, docId, data);
       return true;
     } catch (e) {
       _lastDbError = `SaveWithId exception: ${e.message}`;
-      console.warn("Firebase:", _lastDbError);
+      console.warn("[db]", _lastDbError);
       return false;
     }
   },
 
-  // Fetch all documents with pagination (follows nextPageToken)
-  async getAllPaginated(collection, maxPages = 20) {
-    _lastDbError = null;
-    try {
-      let all = [];
-      let pageToken = null;
-      let fbFailed = false;
-      for (let i = 0; i < maxPages; i++) {
-        let url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=100`;
-        if (pageToken) url += `&pageToken=${pageToken}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          const err = await res.text();
-          _lastDbError = `GetAllPaginated failed (${res.status}): ${err.substring(0, 200)}`;
-          console.warn("Firebase:", _lastDbError);
-          fbFailed = true;
-          break;
-        }
-        const data = await res.json();
-        const docs = (data.documents || []).map(fromFsDoc).filter(Boolean);
-        all = all.concat(docs);
-        if (!data.nextPageToken) break;
-        pageToken = data.nextPageToken;
-      }
-      if (!fbFailed) {
-        // Firebase succeeded — PURGE stale localStorage, then re-populate with fresh data only
-        localCache.clearCollection(collection);
-        all.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
-        return all;
-      }
-      // Firebase failed mid-pagination — try localStorage -> file backup
-      if (fbFailed || _lastDbError) {
-        const cached = localCache.getAll(collection);
-        if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase paginated failed)`); return cached; }
-        const fileDocs = await fileBackup.getAll(collection);
-        if (fileDocs.length > 0) { console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`); return fileDocs; }
-      }
-      return all;
-    } catch (e) {
-      _lastDbError = `GetAllPaginated exception: ${e.message}`;
-      console.warn("Firebase:", _lastDbError);
-      // Fallback: localStorage -> file backup
-      const cached = localCache.getAll(collection);
-      if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`);
-      return fileDocs;
-    }
+  async getAllPaginated(collection) {
+    // No pagination needed for local — just return all docs
+    return _dedupFetch(`getAllPaginated:${collection}`, () => this._getAllLocal(collection));
   },
 
-  // Quick test — try to list the collection
   async test() {
+    // Test local file store connectivity
     try {
-      const url = `${FS_BASE}/analyses?key=${FIREBASE_CONFIG.apiKey}&pageSize=1`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        const err = await res.text();
-        return { ok: false, error: `${res.status}: ${err.substring(0, 150)}` };
-      }
-      return { ok: true };
+      const res = await fetch("/__api/backup/pipelines");
+      if (res.ok) return { ok: true, mode: "local" };
+      return { ok: false, error: "File store not responding" };
     } catch (e) {
       return { ok: false, error: e.message };
     }

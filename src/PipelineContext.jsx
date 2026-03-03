@@ -66,6 +66,29 @@ export function PipelineProvider({ children }) {
               merged[key] = latest[key];
             }
           }
+          // Patch from localStorage snapshot: fill any null/empty module fields that the
+          // snapshot has — handles the case where Firebase PATCH succeeded for m1 but failed
+          // to persist m2/m4 updates (localStorage is always written before Firebase).
+          try {
+            const snap = localStorage.getItem("xt_pipeline_snapshot");
+            if (snap) {
+              const parsed = JSON.parse(snap);
+              for (const key of ["m1", "m2", "m3", "m4", "m5"]) {
+                const fbVal = merged[key];
+                const localVal = parsed[key];
+                if (localVal && typeof localVal === "object") {
+                  // For each field in the module, if Firebase has null/empty but localStorage has data, prefer localStorage
+                  const patched = { ...fbVal };
+                  for (const [field, localField] of Object.entries(localVal)) {
+                    if ((patched[field] == null || patched[field] === "" || (Array.isArray(patched[field]) && patched[field].length === 0)) && localField != null && localField !== "" && !(Array.isArray(localField) && localField.length === 0)) {
+                      patched[field] = localField;
+                    }
+                  }
+                  merged[key] = patched;
+                }
+              }
+            }
+          } catch (e) { console.warn("[Pipeline] localStorage snapshot patch failed:", e.message); }
           dispatch({ type: "LOAD", payload: { ...merged, _docId: docId } });
         } else {
           // No Firebase docs — try localStorage snapshot

@@ -55,7 +55,7 @@ function localBackupPlugin() {
                 return data
               } catch { return null }
             }).filter(Boolean)
-            docs.sort((a, b) => (b.created_at || b._cachedAt || '').toString().localeCompare((a.created_at || a._cachedAt || '').toString()))
+            docs.sort((a, b) => (b.updated_at || b.created_at || b._cachedAt || '').toString().localeCompare((a.updated_at || a.created_at || a._cachedAt || '').toString()))
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify(docs))
           } catch (e) {

@@ -268,94 +268,80 @@ export default function App() {
   const scanStartRef = useRef(null);
   const [scanETA, setScanETA] = useState(null); // { elapsed, remaining } in seconds, or null
 
+  // ── Load scan history from Firebase (callable for manual refresh) ──
+  const loadScanHistory = useCallback(async (replaceSelected = false) => {
+    let allScans = [];
+    try {
+      const fbMeta = await db.getAllPaginated("m2_scan_meta");
+      const fbScans = await db.getAllPaginated("m2_scans");
+      const scanById = {};
+      fbScans.forEach(s => { if (s.id) scanById[s.id] = s; });
+      let fbResults = [];
+      try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch (e) { console.warn("loadScanHistory: m2_scan_results load failed:", e.message); }
+      const resultsByScan = {};
+      fbResults.forEach(r => {
+        const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+        if (sid) { (resultsByScan[sid] = resultsByScan[sid] || []).push(r); }
+      });
+      const metaById = {};
+      fbMeta.forEach(m => { if (m.id) metaById[m.id] = m; });
+      const allScanIds = new Set([...Object.keys(scanById), ...Object.keys(metaById)]);
+      for (const sid of allScanIds) {
+        const fullDoc = scanById[sid];
+        const meta = metaById[sid];
+        const indResults = resultsByScan[sid] || [];
+        if (fullDoc && fullDoc.results && fullDoc.results.length > 0) {
+          allScans.push(fullDoc);
+        } else if (indResults.length > 0) {
+          allScans.push({
+            id: sid, date: meta?.date || indResults[0]?.date || "",
+            llms: meta?.llms || ["claude", "gemini", "openai"],
+            company: meta?.company || "Sirion", results: indResults,
+            scores: meta?.scores || computeScores(indResults, meta?.llms || ["claude", "gemini", "openai"]),
+            errors: meta?.errors || [], cost: meta?.cost || {}, duration: meta?.duration || 0, _reconstructed: true,
+          });
+        } else if (meta && meta.status === "complete") {
+          allScans.push({ ...meta, results: [] });
+        }
+      }
+      // Find most recent incomplete scan — sort by date desc so newest wins
+      // Include "failed" scans that have saved results (interrupted by PC suspend/network error)
+      const sortedMeta = [...fbMeta].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      const pausedOrRunning = sortedMeta.find(m =>
+        m.status === "paused" || m.status === "running" ||
+        (m.status === "failed" && (resultsByScan[m.id]?.length || 0) > 0)
+      );
+      if (pausedOrRunning) {
+        const completedResults = resultsByScan[pausedOrRunning.id] || [];
+        const completedQids = new Set(completedResults.map(r => r.qid));
+        setResumableScan({ meta: pausedOrRunning, completedQids, completedCount: completedQids.size, totalQueries: pausedOrRunning.totalQueries || 0 });
+      } else {
+        setResumableScan(null);
+      }
+    } catch (e) { console.warn("M2 scan load error:", e.message); }
+
+    if (allScans.length > 0) {
+      const sorted = allScans.sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 20);
+      setScanHistory(sorted);
+      // Prefer scans with non-zero overall score; fall back to most results if all scores are 0
+      const best = sorted.reduce((a, b) => {
+        const aScore = a.scores?.overall || 0;
+        const bScore = b.scores?.overall || 0;
+        if (aScore === 0 && bScore > 0) return b;
+        if (bScore === 0 && aScore > 0) return a;
+        return (b.results?.length || 0) > (a.results?.length || 0) ? b : a;
+      }, sorted[0]);
+      if (replaceSelected || !scanData) setScanData(best);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Single combined hydration: load scan history + decide question bank source ──
-  // M1 pipeline questions ALWAYS win over saved bank (they are the source of truth).
-  // This single effect eliminates the race between async Firebase load and pipeline read.
   useEffect(() => {
     (async () => {
-      // ═══ STEP 1: Load scan data (metadata + full scans + individual results) ═══
-      let allScans = [];
-      try {
-        // 1a. Load scan metadata (lightweight, always saved)
-        const fbMeta = await db.getAllPaginated("m2_scan_meta");
+      // STEP 1: Load scan history
+      await loadScanHistory(false);
 
-        // 1b. Load full scan docs (legacy format + new stripped format)
-        const fbScans = await db.getAllPaginated("m2_scans");
-        const scanById = {};
-        fbScans.forEach(s => { if (s.id) scanById[s.id] = s; });
-
-        // 1c. Load individual scan results (for reconstruction if full doc is missing)
-        let fbResults = [];
-        try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
-        const resultsByScan = {};
-        fbResults.forEach(r => {
-          const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
-          if (sid) { (resultsByScan[sid] = resultsByScan[sid] || []).push(r); }
-        });
-
-        // 1d. Reconstruct complete scans from best available source
-        const metaById = {};
-        fbMeta.forEach(m => { if (m.id) metaById[m.id] = m; });
-
-        // Merge all known scan IDs
-        const allScanIds = new Set([...Object.keys(scanById), ...Object.keys(metaById)]);
-
-        for (const sid of allScanIds) {
-          const fullDoc = scanById[sid];
-          const meta = metaById[sid];
-          const indResults = resultsByScan[sid] || [];
-
-          // Prefer full doc if it has results
-          if (fullDoc && fullDoc.results && fullDoc.results.length > 0) {
-            allScans.push(fullDoc);
-          } else if (indResults.length > 0) {
-            // Reconstruct from metadata + individual results
-            const reconstructed = {
-              id: sid,
-              date: meta?.date || indResults[0]?.date || "",
-              llms: meta?.llms || ["claude", "gemini", "openai"],
-              company: meta?.company || "Sirion",
-              results: indResults,
-              scores: meta?.scores || computeScores(indResults, meta?.llms || ["claude", "gemini", "openai"]),
-              errors: meta?.errors || [],
-              cost: meta?.cost || {},
-              duration: meta?.duration || 0,
-              _reconstructed: true,
-            };
-            allScans.push(reconstructed);
-          } else if (meta && meta.status === "complete") {
-            // Metadata exists but no results found — keep as placeholder
-            allScans.push({ ...meta, results: [] });
-          }
-        }
-
-        // 1e. Check for paused/running scans (resume offer)
-        const pausedOrRunning = fbMeta.find(m => m.status === "paused" || m.status === "running");
-        if (pausedOrRunning) {
-          const completedResults = resultsByScan[pausedOrRunning.id] || [];
-          const completedQids = new Set(completedResults.map(r => r.qid));
-          setResumableScan({
-            meta: pausedOrRunning,
-            completedQids,
-            completedCount: completedQids.size,
-            totalQueries: pausedOrRunning.totalQueries || 0,
-          });
-        } else {
-          setResumableScan(null); // Explicitly clear — no stale resume banner
-        }
-
-      } catch (e) { console.warn("M2 scan hydration error:", e.message); }
-
-      // Set scan history and active scan
-      if (allScans.length > 0) {
-        const sorted = allScans.sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 20);
-        setScanHistory(sorted);
-        // Prefer the scan with the most results as default view
-        const best = sorted.reduce((a, b) => ((b.results?.length || 0) > (a.results?.length || 0) ? b : a), sorted[0]);
-        if (!scanData) setScanData(best);
-      }
-
-      // ═══ STEP 2: Decide question bank ═══
+      // STEP 2: Decide question bank
       const m1Qs = pipeline.m1.questions;
       if (m1Qs && m1Qs.length > 0) {
         setQueries(m1Qs);
@@ -383,18 +369,29 @@ export default function App() {
       if (scanning) return; // Don't interfere with an active scan
       try {
         const fbMeta = await db.getAllPaginated("m2_scan_meta");
-        const pausedOrRunning = fbMeta.find(m => m.status === "paused" || m.status === "running");
+        let fbResults = [];
+        try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch (e) { console.warn("refreshScanState: m2_scan_results load failed:", e.message); }
+        const resultsByScanId = {};
+        fbResults.forEach(r => {
+          const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+          if (sid) (resultsByScanId[sid] = resultsByScanId[sid] || []).push(r);
+        });
+        // Sort most recent first; include "failed" scans with saved results (PC suspend)
+        const sortedMeta = [...fbMeta].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const pausedOrRunning = sortedMeta.find(m =>
+          m.status === "paused" || m.status === "running" ||
+          (m.status === "failed" && (resultsByScanId[m.id]?.length || 0) > 0)
+        );
         if (pausedOrRunning) {
-          let fbResults = [];
-          try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
-          // Count ALL completed results across ALL scan IDs (not just this scan)
-          // This handles the case where resume created a new scanId before the fix
-          const allCompletedQids = new Set(fbResults.map(r => r.qid).filter(Boolean));
+          // BUG-002 fix: only count results from THIS scan (not all scans)
+          const thisScanResults = resultsByScanId[pausedOrRunning.id] || [];
+          const completedQids = new Set(thisScanResults.map(r => r.qid).filter(Boolean));
           setResumableScan({
             meta: pausedOrRunning,
-            completedQids: allCompletedQids,
-            completedCount: allCompletedQids.size,
-            totalQueries: queries.length || pausedOrRunning.totalQueries || 138,
+            completedQids,
+            completedCount: completedQids.size,
+            // BUG-004+005 fix: prefer scan metadata total, no magic number fallback
+            totalQueries: pausedOrRunning.totalQueries || queries.length || 0,
           });
         } else {
           setResumableScan(null);
@@ -724,6 +721,9 @@ export default function App() {
     const abortController = new AbortController();
     abortRef.current = abortController;
 
+    // Track real-time progress so abort/error saves use accurate count (not original 0)
+    let actualCompleted = prevCompleted;
+
     // 2. Incremental save callback — saves each result to Firebase as it completes
     const saveErrors = [];
     const onResultReady = async (resultItem, index, total) => {
@@ -737,9 +737,9 @@ export default function App() {
         setSaveWarnings(prev => [...prev, { msg: errMsg, ts: Date.now() }]);
       }
       // Update metadata progress — offset by previously completed queries on resume
-      const totalCompleted = prevCompleted + index + 1;
+      actualCompleted = prevCompleted + index + 1;
       db.saveWithId("m2_scan_meta", scanId, {
-        ...scanMeta, completedQueries: totalCompleted, status: "running",
+        ...scanMeta, completedQueries: actualCompleted, status: "running",
       }).catch(() => {});
     };
 
@@ -765,7 +765,8 @@ export default function App() {
           const oldOnly = prevResults.filter(r => !newQids.has(r.qid));
           result.results = [...oldOnly, ...result.results];
           result.count = result.results.length;
-          // Recompute scores with full result set
+          // Recompute scores with full result set (BUG-001 fix)
+          result.scores = computeScores(result.results, llms);
           console.log(`Resume merge: ${oldOnly.length} old + ${newQids.size} new = ${result.results.length} total results`);
         } catch (mergeErr) {
           console.warn("Could not merge old results on resume:", mergeErr.message);
@@ -793,7 +794,8 @@ export default function App() {
       // 4. Mark scan complete in metadata
       const completeMeta = {
         ...scanMeta, status: "complete",
-        completedQueries: prevCompleted + result.results.length,
+        // BUG-003 fix: after merge, result.results already contains old+new, don't add prevCompleted again
+        completedQueries: result.results.length,
         scores: result.scores,
         errors: result.errors,
         cost: result.cost,
@@ -838,12 +840,20 @@ export default function App() {
       setNav("overview");
     } catch (e) {
       if (e.name === "AbortError") {
-        // Mark as paused (resumable)
-        db.saveWithId("m2_scan_meta", scanId, { ...scanMeta, status: "paused" }).catch(() => {});
+        // User clicked Cancel — mark as paused (resumable)
+        db.saveWithId("m2_scan_meta", scanId, { ...scanMeta, completedQueries: actualCompleted, status: "paused" }).catch(() => {});
         setScanError("Scan paused. Your completed results are saved. You can resume later.");
       } else {
-        db.saveWithId("m2_scan_meta", scanId, { ...scanMeta, status: "failed", error: e.message }).catch(() => {});
-        setScanError(e.message);
+        // Network error, PC suspend, timeout, etc.
+        // If we completed some queries, save as "paused" so resume detection finds it
+        // Use actualCompleted (not scanMeta.completedQueries which is 0 from initialization)
+        const statusToSave = actualCompleted > 0 ? "paused" : "failed";
+        db.saveWithId("m2_scan_meta", scanId, { ...scanMeta, completedQueries: actualCompleted, status: statusToSave, error: e.message }).catch(() => {});
+        if (actualCompleted > 0) {
+          setScanError(`Scan interrupted after ${actualCompleted} queries. Your results are saved — click Resume to continue.`);
+        } else {
+          setScanError(e.message);
+        }
       }
     } finally {
       abortRef.current = null;
@@ -964,6 +974,12 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: T.dim, fontFamily: T.fontM }}>{scanData ? new Date(scanData.date).toLocaleString() : "No scan yet"}</span>
             {allLLMs.map(id => <div key={id} style={{ width: 6, height: 6, borderRadius: "50%", background: LLM_META[id]?.color || T.dim, opacity: 0.8 }} title={LLM_META[id]?.name} />)}
+            <button
+              onClick={async () => { setHydrating(true); await loadScanHistory(true); setHydrating(false); }}
+              title="Reload scan history from database"
+              style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid " + T.border, background: "transparent", color: T.teal, fontSize: 11, fontFamily: T.fontM, cursor: "pointer", letterSpacing: 0.5 }}>
+              ↺ Reload
+            </button>
           </div>
         </div>
 
@@ -1175,6 +1191,13 @@ export default function App() {
               {scanning && scanProgress && (
                 <Card glow={T.teal} style={{ borderLeft: "3px solid " + T.teal }}>
                   <Label>SCANNING IN PROGRESS</Label>
+                  {/* Sleep warning */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 6, padding: "7px 10px", marginBottom: 10 }}>
+                    <span style={{ fontSize: 14 }}>⚠️</span>
+                    <span style={{ fontSize: 10, color: "#fbbf24", lineHeight: 1.5 }}>
+                      <strong>Keep this tab active.</strong> Scan pauses if the browser tab is hidden or the computer sleeps. If interrupted, click <strong>Cancel Scan</strong> first — then Resume when you return.
+                    </span>
+                  </div>
                   {/* Overall progress */}
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
@@ -1243,9 +1266,13 @@ export default function App() {
                       const originalDate = resumableScan.meta.date;
                       try {
                         let fbResults = [];
-                        try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch {}
-                        // Count ALL completed qids regardless of scan ID
-                        const freshQids = new Set(fbResults.map(r => r.qid).filter(Boolean));
+                        try { fbResults = await db.getAllPaginated("m2_scan_results"); } catch (e) { console.warn("Resume: m2_scan_results load failed:", e.message); }
+                        // ONLY count results from THIS scan — cross-scan qid matching causes false "all done"
+                        const thisScanResults = fbResults.filter(r => {
+                          const sid = r.scanId || (r._id ? r._id.split("__")[0] : null);
+                          return sid === originalScanId;
+                        });
+                        const freshQids = new Set(thisScanResults.map(r => r.qid).filter(Boolean));
                         const remaining = queries.filter(q => !freshQids.has(q.id));
                         if (remaining.length > 0) {
                           // Resume with SAME scanId — new results accumulate under original scan
@@ -1313,7 +1340,7 @@ export default function App() {
                       <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Platforms</div>
                     </div>
                     <div>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: T.purple, fontFamily: T.fontM }}>{scanData.scores?.mentionRate || 0}%</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: T.purple, fontFamily: T.fontM }}>{scanData.scores?.mention ?? scanData.scores?.mentionRate ?? 0}%</div>
                       <div style={{ fontSize: 9, color: T.dim, textTransform: "uppercase", letterSpacing: 0.6 }}>Mention Rate</div>
                     </div>
                     {scanData.date && (

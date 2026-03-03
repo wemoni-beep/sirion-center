@@ -1,14 +1,16 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Component, lazy, Suspense } from "react";
 import { themes, ThemeContext } from "./ThemeContext";
 import { PipelineProvider, usePipeline } from "./PipelineContext";
 import { GOOGLE_FONTS_URL } from "./typography";
 import { PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import QuestionGenerator from "./QuestionGenerator";
-import PerceptionMonitor from "./PerceptionMonitor";
-import AuthorityRing from "./AuthorityRing";
-import BuyingStageGuide from "./BuyingStageGuide";
-import CLMAdvisor from "./CLMAdvisor";
-import VisualDemo from "./VisualDemo";
+
+// BUG-009 fix: lazy-load heavy module components for code splitting
+const QuestionGenerator = lazy(() => import("./QuestionGenerator"));
+const PerceptionMonitor = lazy(() => import("./PerceptionMonitor"));
+const AuthorityRing = lazy(() => import("./AuthorityRing"));
+const BuyingStageGuide = lazy(() => import("./BuyingStageGuide"));
+const CLMAdvisor = lazy(() => import("./CLMAdvisor"));
+const VisualDemo = lazy(() => import("./VisualDemo"));
 
 /* ═══════════════════════════════════════════════════════
    XTRUSIO — AI Organic Growth Engine
@@ -572,6 +574,39 @@ function SettingsPage({ t }) {
   );
 }
 
+/* ── Error Boundary — catches render errors in any module, shows recovery UI ── */
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.error("[ErrorBoundary] Module crash:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      const t = this.props.t || { bg: "#0f0f15", bgCard: "#1a1a2e", border: "#2a2a3e", brand: "#7c3aed", text: "#e2e8f0", textSec: "#94a3b8" };
+      return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 24px", gap: 16, textAlign: "center" }}>
+          <div style={{ fontSize: 28 }}>⚠️</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: t.text }}>Something went wrong in this module</div>
+          <div style={{ fontSize: 12, color: t.textSec, maxWidth: 400, lineHeight: 1.6, fontFamily: "var(--mono)", background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 14px", wordBreak: "break-word" }}>
+            {this.state.error?.message || "An unexpected error occurred"}
+          </div>
+          <button onClick={() => this.setState({ hasError: false, error: null })}
+            style={{ marginTop: 8, padding: "8px 20px", borderRadius: 6, border: "none", background: t.brand, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            Try Again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ── Universal loading gate — blocks all modules until pipeline data arrives from Firebase ── */
 function ModuleArea({ renderContent, t }) {
   const { pipeline } = usePipeline();
@@ -583,7 +618,16 @@ function ModuleArea({ renderContent, t }) {
       </div>
     );
   }
-  return renderContent();
+  return (
+    <Suspense fallback={
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14, background: t.bg }}>
+        <div style={{ width: 34, height: 34, borderRadius: "50%", border: "3px solid " + t.brand + "30", borderTopColor: t.brand, animation: "spin 0.8s linear infinite" }} />
+        <span style={{ fontSize: 12, color: t.dim, fontFamily: "var(--mono)", letterSpacing: 0.5 }}>Loading module...</span>
+      </div>
+    }>
+      {renderContent()}
+    </Suspense>
+  );
 }
 
 /* ── Main App ── */
@@ -748,7 +792,9 @@ export default function App() {
           <div style={{ flex: 1, overflow: "auto", padding: mob ? 16 : "32px 40px", display: "flex", flexDirection: "column" }}>
             <div style={{ maxWidth: 1200, margin: "0 auto", width: "100%", flex: 1 }}>
               <div className="fade-up" key={active} style={{ height: "100%" }}>
-                <ModuleArea renderContent={renderContent} t={t} />
+                <ErrorBoundary t={t}>
+                  <ModuleArea renderContent={renderContent} t={t} />
+                </ErrorBoundary>
               </div>
             </div>
           </div>

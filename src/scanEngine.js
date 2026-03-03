@@ -136,7 +136,7 @@ async function askClaude(question, onRetry, timeoutMs = 90000) {
       method: "POST",
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
-        model: "claude-3-5-haiku-20241022",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: LLM_MAX_TOKENS,
         system: DECISION_MAKER_SYSTEM,
         messages: [{ role: "user", content: question }],
@@ -353,14 +353,12 @@ Rules:
  * Uses Haiku for speed — structured JSON extraction doesn't need Sonnet.
  */
 async function analyzeBatch(question, responses, company, onRetry, timeoutMs = 45000) {
-  if (!ANTHROPIC_KEY) throw new Error("Claude API needed for analysis");
+  const llmKeys = Object.keys(responses); // Must be before try-catch so catch can use it
 
   // Build combined prompt with all successful responses
   const responseSections = Object.entries(responses)
     .map(([llmId, resp]) => `=== ${llmId.toUpperCase()} RESPONSE ===\n"""${resp.substring(0, 2500)}"""`)
     .join("\n\n");
-
-  const llmKeys = Object.keys(responses);
 
   const userMsg = `TARGET COMPANY: ${company}
 
@@ -374,12 +372,13 @@ Return a JSON object with keys: ${llmKeys.map(k => `"${k}"`).join(", ")}
 Each value must follow the analysis schema. Return JSON only.`;
 
   try {
+    if (!ANTHROPIC_KEY) throw new Error("Claude API needed for analysis — add VITE_ANTHROPIC_API_KEY to .env");
     await throttle("claude");
     const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
-        model: "claude-3-5-haiku-20241022",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1800,
         system: ANALYSIS_SYSTEM + `\n\nIMPORTANT: You are analyzing MULTIPLE responses at once. Return a JSON object where each key is an LLM name (${llmKeys.join(", ")}) and each value is the full analysis object following the schema above. Example structure: {"claude": {...}, "gemini": {...}, "openai": {...}}`,
         messages: [{ role: "user", content: userMsg }],
@@ -512,156 +511,175 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
     if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
 
     const q = queries[qi];
-    const analyses = {};
-    const activeSet = new Set(llmIds);
+    try {
+      const analyses = {};
+      const activeSet = new Set(llmIds);
 
-    // Wave 1: Ask ALL LLMs in PARALLEL — each updates llmDone as it finishes
-    onProgress?.({
-      phase: "scanning",
-      current: completedCount * llmIds.length,
-      total: totalSteps,
-      query: q.query.substring(0, 60),
-      status: `Q${qi + 1}/${queries.length}: Sending to ${llmIds.join(", ")}...`,
-      percent: Math.round((completedCount / queries.length) * 70),
-      llmDone: { ...llmDone },
-      activeLLMs: [...activeSet],
-      queryCount: queries.length,
-    });
+      // Wave 1: Ask ALL LLMs in PARALLEL — each updates llmDone as it finishes
+      onProgress?.({
+        phase: "scanning",
+        current: completedCount * llmIds.length,
+        total: totalSteps,
+        query: q.query.substring(0, 60),
+        status: `Q${qi + 1}/${queries.length}: Sending to ${llmIds.join(", ")}...`,
+        percent: Math.round((completedCount / queries.length) * 70),
+        llmDone: { ...llmDone },
+        activeLLMs: [...activeSet],
+        queryCount: queries.length,
+      });
 
-    if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
+      if (abortSignal?.aborted) throw new DOMException("Scan aborted by user", "AbortError");
 
-    const llmPromises = llmIds.map(lid => {
-      const caller = LLM_CALLERS[lid];
-      if (!caller) {
-        activeSet.delete(lid);
-        return Promise.resolve({ lid, result: { ok: false, error: "Unknown LLM" } });
-      }
-      return caller(q.query, onRetry)
-        .then(result => {
-          llmDone[lid]++;
+      const llmPromises = llmIds.map(lid => {
+        const caller = LLM_CALLERS[lid];
+        if (!caller) {
           activeSet.delete(lid);
-          onProgress?.({
-            phase: "scanning",
-            current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
-            total: totalSteps,
-            query: q.query.substring(0, 60),
-            status: `Q${qi + 1}/${queries.length}: ${lid} responded`,
-            percent: Math.round((completedCount / queries.length) * 70),
-            llmDone: { ...llmDone },
-            activeLLMs: [...activeSet],
-            queryCount: queries.length,
+          return Promise.resolve({ lid, result: { ok: false, error: "Unknown LLM" } });
+        }
+        return caller(q.query, onRetry)
+          .then(result => {
+            llmDone[lid]++;
+            activeSet.delete(lid);
+            onProgress?.({
+              phase: "scanning",
+              current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
+              total: totalSteps,
+              query: q.query.substring(0, 60),
+              status: `Q${qi + 1}/${queries.length}: ${lid} responded`,
+              percent: Math.round((completedCount / queries.length) * 70),
+              llmDone: { ...llmDone },
+              activeLLMs: [...activeSet],
+              queryCount: queries.length,
+            });
+            return { lid, result };
+          })
+          .catch(err => {
+            llmDone[lid]++;
+            activeSet.delete(lid);
+            onProgress?.({
+              phase: "scanning",
+              current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
+              total: totalSteps,
+              query: q.query.substring(0, 60),
+              status: `Q${qi + 1}/${queries.length}: ${lid} error`,
+              percent: Math.round((completedCount / queries.length) * 70),
+              llmDone: { ...llmDone },
+              activeLLMs: [...activeSet],
+              queryCount: queries.length,
+            });
+            return { lid, result: { ok: false, error: err.message } };
           });
-          return { lid, result };
-        })
-        .catch(err => {
-          llmDone[lid]++;
-          activeSet.delete(lid);
-          onProgress?.({
-            phase: "scanning",
-            current: completedCount * llmIds.length + (llmIds.length - activeSet.size),
-            total: totalSteps,
-            query: q.query.substring(0, 60),
-            status: `Q${qi + 1}/${queries.length}: ${lid} error`,
-            percent: Math.round((completedCount / queries.length) * 70),
-            llmDone: { ...llmDone },
-            activeLLMs: [...activeSet],
-            queryCount: queries.length,
-          });
-          return { lid, result: { ok: false, error: err.message } };
+      });
+
+      const askResultsList = await Promise.all(llmPromises);
+      apiCalls += llmIds.length;
+
+      // Wave 2: Batch-analyze ALL responses in ONE Claude call
+      onProgress?.({
+        phase: "analyzing",
+        current: completedCount * llmIds.length + llmIds.length,
+        total: totalSteps,
+        query: q.query.substring(0, 60),
+        status: `Q${qi + 1}/${queries.length}: Analyzing responses...`,
+        percent: Math.round((completedCount / queries.length) * 70),
+        llmDone: { ...llmDone },
+        activeLLMs: [],
+        queryCount: queries.length,
+      });
+
+      const successfulResponses = {};
+      const responseTexts = {};
+      askResultsList.forEach(({ lid, result }) => {
+        if (result?.ok) {
+          successfulResponses[lid] = result.text;
+          responseTexts[lid] = result;
+        } else {
+          const errMsg = result?.error || "LLM call failed";
+          errors.push({ qid: q.id, llm: lid, error: errMsg });
+          partialFailures++;
+          analyses[lid] = { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg };
+        }
+      });
+
+      if (Object.keys(successfulResponses).length > 0) {
+        apiCalls++;
+        const batchResult = await analyzeBatch(q.query, successfulResponses, company, onRetry, 45000);
+
+        Object.entries(batchResult).forEach(([llmId, analysis]) => {
+          if (!analysis || analysis._error) {
+            analyses[llmId] = analysis || { ...ERROR_ANALYSIS, _error: "Missing from batch" };
+            return;
+          }
+          const resp = responseTexts[llmId];
+          analysis.response_snippet = resp?.text?.substring(0, 300) || "";
+          analysis.full_response = resp?.text || "";
+          if (resp?.citations?.length > 0) {
+            const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
+            resp.citations.forEach(url => {
+              try {
+                const d = new URL(url).hostname.replace(/^www\./, "");
+                if (!existing.has(d)) {
+                  (analysis.cited_sources = analysis.cited_sources || []).push({ domain: d, type: "other", context: "Cited by Perplexity", url });
+                  existing.add(d);
+                }
+              } catch {}
+            });
+          }
+          const sources = analysis.cited_sources || [];
+          if (typeof analysis.citation_presence !== "boolean") analysis.citation_presence = sources.length > 0;
+          if (typeof analysis.sirion_content_cited !== "boolean") {
+            analysis.sirion_content_cited = sources.some(s => /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain));
+          }
+          analyses[llmId] = analysis;
         });
-    });
 
-    const askResultsList = await Promise.all(llmPromises);
-    apiCalls += llmIds.length;
-
-    // Wave 2: Batch-analyze ALL responses in ONE Claude call
-    onProgress?.({
-      phase: "analyzing",
-      current: completedCount * llmIds.length + llmIds.length,
-      total: totalSteps,
-      query: q.query.substring(0, 60),
-      status: `Q${qi + 1}/${queries.length}: Analyzing responses...`,
-      percent: Math.round((completedCount / queries.length) * 70),
-      llmDone: { ...llmDone },
-      activeLLMs: [],
-      queryCount: queries.length,
-    });
-
-    const successfulResponses = {};
-    const responseTexts = {};
-    askResultsList.forEach(({ lid, result }) => {
-      if (result?.ok) {
-        successfulResponses[lid] = result.text;
-        responseTexts[lid] = result;
-      } else {
-        const errMsg = result?.error || "LLM call failed";
-        errors.push({ qid: q.id, llm: lid, error: errMsg });
-        partialFailures++;
-        analyses[lid] = { ...ERROR_ANALYSIS, gaps: [errMsg], _error: errMsg };
+        llmIds.forEach(id => {
+          if (!analyses[id]) analyses[id] = { ...ERROR_ANALYSIS, _error: "Not in batch result" };
+        });
       }
-    });
 
-    if (Object.keys(successfulResponses).length > 0) {
-      apiCalls++;
-      const batchResult = await analyzeBatch(q.query, successfulResponses, company, onRetry, 45000);
+      const difficulty = scoreDifficulty(analyses);
+      const resultItem = {
+        qid: q.id, query: q.query, persona: q.persona, stage: q.stage,
+        cw: q.cw, lifecycle: q.lifecycle || "full-stack", analyses, difficulty,
+      };
+      results.push(resultItem);
 
-      Object.entries(batchResult).forEach(([llmId, analysis]) => {
-        if (!analysis || analysis._error) {
-          analyses[llmId] = analysis || { ...ERROR_ANALYSIS, _error: "Missing from batch" };
-          return;
-        }
-        const resp = responseTexts[llmId];
-        analysis.response_snippet = resp?.text?.substring(0, 300) || "";
-        analysis.full_response = resp?.text || "";
-        if (resp?.citations?.length > 0) {
-          const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
-          resp.citations.forEach(url => {
-            try {
-              const d = new URL(url).hostname.replace(/^www\./, "");
-              if (!existing.has(d)) {
-                (analysis.cited_sources = analysis.cited_sources || []).push({ domain: d, type: "other", context: "Cited by Perplexity", url });
-                existing.add(d);
-              }
-            } catch {}
-          });
-        }
-        const sources = analysis.cited_sources || [];
-        if (typeof analysis.citation_presence !== "boolean") analysis.citation_presence = sources.length > 0;
-        if (typeof analysis.sirion_content_cited !== "boolean") {
-          analysis.sirion_content_cited = sources.some(s => /sirion/i.test(s.domain) || /sirionlabs/i.test(s.domain));
-        }
-        analyses[llmId] = analysis;
+      if (onResultReady) {
+        try { await onResultReady(resultItem, qi, queries.length); }
+        catch (e) { errors.push({ qid: q.id, llm: "_save", error: "Incremental save failed: " + e.message }); }
+      }
+
+      completedCount++;
+      onProgress?.({
+        phase: "analyzed",
+        current: completedCount,
+        total: queries.length,
+        query: q.query.substring(0, 60),
+        status: `${completedCount}/${queries.length} questions done`,
+        percent: 70 + Math.round((completedCount / queries.length) * 30),
+        llmDone: { ...llmDone },
+        activeLLMs: [],
+        queryCount: queries.length,
       });
-
-      llmIds.forEach(id => {
-        if (!analyses[id]) analyses[id] = { ...ERROR_ANALYSIS, _error: "Not in batch result" };
-      });
+    } catch (e) {
+      if (e.name === "AbortError") throw e; // always propagate user cancellation
+      // Any unexpected error → record as failed result so the scan continues
+      console.warn(`[processQuery Q${qi + 1}] Unexpected error, continuing scan:`, e.message);
+      const fallbackAnalyses = {};
+      llmIds.forEach(id => { fallbackAnalyses[id] = { ...ERROR_ANALYSIS, _error: e.message }; });
+      partialFailures++;
+      const resultItem = {
+        qid: q.id, query: q.query, persona: q.persona, stage: q.stage,
+        cw: q.cw, lifecycle: q.lifecycle || "full-stack",
+        analyses: fallbackAnalyses, difficulty: scoreDifficulty(fallbackAnalyses),
+      };
+      results.push(resultItem);
+      if (onResultReady) {
+        try { await onResultReady(resultItem, qi, queries.length); } catch (e) { console.warn(`[processQuery Q${qi + 1}] onResultReady save failed:`, e.message); }
+      }
+      completedCount++;
     }
-
-    const difficulty = scoreDifficulty(analyses);
-    const resultItem = {
-      qid: q.id, query: q.query, persona: q.persona, stage: q.stage,
-      cw: q.cw, lifecycle: q.lifecycle || "full-stack", analyses, difficulty,
-    };
-    results.push(resultItem);
-
-    if (onResultReady) {
-      try { await onResultReady(resultItem, qi, queries.length); }
-      catch (e) { errors.push({ qid: q.id, llm: "_save", error: "Incremental save failed: " + e.message }); }
-    }
-
-    completedCount++;
-    onProgress?.({
-      phase: "analyzed",
-      current: completedCount,
-      total: queries.length,
-      query: q.query.substring(0, 60),
-      status: `${completedCount}/${queries.length} questions done`,
-      percent: 70 + Math.round((completedCount / queries.length) * 30),
-      llmDone: { ...llmDone },
-      activeLLMs: [],
-      queryCount: queries.length,
-    });
   }
 
   // ── Sliding window: keep PIPELINE_WIDTH queries in flight simultaneously ──
