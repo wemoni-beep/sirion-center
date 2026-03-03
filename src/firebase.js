@@ -219,9 +219,19 @@ export const db = {
     }
   },
 
-  // Simple list (no orderBy — avoids index requirement)
+  // Simple list — LOCAL-FIRST: read from file backup, then Firebase as fallback.
+  // This prevents stale Firebase data from overwriting clean local files.
   async getAll(collection) {
     _lastDbError = null;
+    // 1. Try local file backup first (always authoritative in dev)
+    try {
+      const fileDocs = await fileBackup.getAll(collection);
+      if (fileDocs.length > 0) {
+        console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (local-first)`);
+        return fileDocs;
+      }
+    } catch {}
+    // 2. Try Firebase as fallback
     try {
       const url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=50`;
       const res = await fetch(url);
@@ -229,30 +239,22 @@ export const db = {
         const err = await res.text();
         _lastDbError = `GetAll failed (${res.status}): ${err.substring(0, 200)}`;
         console.warn("Firebase:", _lastDbError);
-        // Fallback: localStorage -> file backup
         const cached = localCache.getAll(collection);
-        if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase failed)`); return cached; }
-        const fileDocs = await fileBackup.getAll(collection);
-        if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (Firebase failed, localStorage empty)`);
-        return fileDocs;
+        if (cached.length > 0) return cached;
+        return [];
       }
       const data = await res.json();
       const docs = (data.documents || []).map(fromFsDoc).filter(Boolean);
-      // Sort client-side by created_at descending
       docs.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-      // PURGE stale localStorage for this collection, then re-populate with fresh Firebase data
-      localCache.clearCollection(collection);
-      docs.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
+      // Cache Firebase docs locally but do NOT overwrite existing file backup
+      docs.forEach(d => { if (d._id) localCache.set(collection, d._id, d); });
       return docs;
     } catch (e) {
       _lastDbError = `GetAll exception: ${e.message}`;
       console.warn("Firebase:", _lastDbError);
-      // Fallback: localStorage -> file backup
       const cached = localCache.getAll(collection);
-      if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`);
-      return fileDocs;
+      if (cached.length > 0) return cached;
+      return [];
     }
   },
 
@@ -303,22 +305,28 @@ export const db = {
     }
   },
 
-  // Fetch all documents with pagination (follows nextPageToken)
+  // Fetch all documents with pagination — LOCAL-FIRST
   async getAllPaginated(collection, maxPages = 20) {
     _lastDbError = null;
+    // 1. Try local file backup first
+    try {
+      const fileDocs = await fileBackup.getAll(collection);
+      if (fileDocs.length > 0) {
+        console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (local-first, paginated)`);
+        return fileDocs;
+      }
+    } catch {}
+    // 2. Fallback to Firebase with pagination
     try {
       let all = [];
       let pageToken = null;
-      let fbFailed = false;
       for (let i = 0; i < maxPages; i++) {
         let url = `${FS_BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}&pageSize=100`;
         if (pageToken) url += `&pageToken=${pageToken}`;
         const res = await fetch(url);
         if (!res.ok) {
-          const err = await res.text();
-          _lastDbError = `GetAllPaginated failed (${res.status}): ${err.substring(0, 200)}`;
+          _lastDbError = `GetAllPaginated failed (${res.status})`;
           console.warn("Firebase:", _lastDbError);
-          fbFailed = true;
           break;
         }
         const data = await res.json();
@@ -327,30 +335,17 @@ export const db = {
         if (!data.nextPageToken) break;
         pageToken = data.nextPageToken;
       }
-      if (!fbFailed) {
-        // Firebase succeeded — PURGE stale localStorage, then re-populate with fresh data only
-        localCache.clearCollection(collection);
-        all.forEach(d => { if (d._id) { localCache.set(collection, d._id, d); fileBackup.save(collection, d._id, d); } });
+      if (all.length > 0) {
+        all.forEach(d => { if (d._id) localCache.set(collection, d._id, d); });
         return all;
       }
-      // Firebase failed mid-pagination — try localStorage -> file backup
-      if (fbFailed || _lastDbError) {
-        const cached = localCache.getAll(collection);
-        if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase paginated failed)`); return cached; }
-        const fileDocs = await fileBackup.getAll(collection);
-        if (fileDocs.length > 0) { console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`); return fileDocs; }
-      }
-      return all;
     } catch (e) {
       _lastDbError = `GetAllPaginated exception: ${e.message}`;
       console.warn("Firebase:", _lastDbError);
-      // Fallback: localStorage -> file backup
-      const cached = localCache.getAll(collection);
-      if (cached.length > 0) { console.info(`[localCache] Serving ${cached.length} docs for ${collection} (Firebase exception)`); return cached; }
-      const fileDocs = await fileBackup.getAll(collection);
-      if (fileDocs.length > 0) console.info(`[fileBackup] Serving ${fileDocs.length} docs for ${collection} (all other stores failed)`);
-      return fileDocs;
     }
+    // 3. Last resort: localStorage cache
+    const cached = localCache.getAll(collection);
+    return cached;
   },
 
   // Quick test — try to list the collection

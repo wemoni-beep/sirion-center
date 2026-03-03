@@ -3,6 +3,20 @@ import { db, loadApiKeys } from "./firebase.js";
 
 const COLLECTION = "pipelines";
 
+// ── Data version: bump this after any seed/reset to clear stale localStorage ──
+const DATA_VERSION = "2026-03-03-v2";
+(function clearStaleCache() {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (localStorage.getItem("xt_data_version") !== DATA_VERSION) {
+      localStorage.removeItem("xt_pipeline_snapshot");
+      localStorage.removeItem("m2_scanHistory");
+      localStorage.setItem("xt_data_version", DATA_VERSION);
+      console.info("[Pipeline] Cleared stale localStorage cache (data version updated)");
+    }
+  } catch {}
+})();
+
 const INITIAL_STATE = {
   _docId: null,
   _loaded: false,
@@ -146,7 +160,8 @@ export function PipelineProvider({ children }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Debounced save to Firebase
+  // Debounced save — LOCAL-FIRST: always save to local_master.json via file backup.
+  // Firebase sync is deferred to the explicit "Push to Firebase" flow.
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
@@ -154,21 +169,18 @@ export function PipelineProvider({ children }) {
       if (!s._loaded) return;
       dispatch({ type: "SET_SAVING", value: true });
       try {
-        // Build saveable data (exclude internal fields)
         const data = {};
         for (const key of Object.keys(s)) {
           if (key.startsWith("_")) continue;
           data[key] = s[key];
         }
         data.updated_at = new Date().toISOString();
-
-        if (s._docId) {
-          await db.update(COLLECTION, s._docId, data);
-        } else {
-          data.created_at = new Date().toISOString();
-          const docId = await db.save(COLLECTION, data);
-          if (docId) dispatch({ type: "SET_DOC_ID", docId });
-        }
+        // Save to local file backup only (local_master.json)
+        await fetch("/__api/backup/pipelines/local_master", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
       } catch (e) {
         console.error("Pipeline save failed:", e);
       }
