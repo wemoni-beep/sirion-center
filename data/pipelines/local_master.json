@@ -2943,64 +2943,757 @@
     "generatedAt": "2026-03-03T11:52:59.402Z",
     "personaProfiles": [
       {
-        "id": "cio",
-        "label": "Chief Information Officer",
-        "questionCount": 27
+        "id": "persona-foulath-holding-jaffar-alshehabi,-mba-1772453547359",
+        "name": "Jaffar Alshehabi, MBA",
+        "title": "Chief Procurement Officer",
+        "company": "Foulath Holding",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cpo",
+        "researchSummary": "Jaffar is a meticulous, data-driven executive managing multi-billion dollar supplier relationships with direct board accountability. His recent promotion to CPO coincides with managing increasingly complex global contracts.",
+        "clmReadiness": 8.2,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-02T15:14:21.418Z"
       },
       {
-        "id": "cm",
-        "label": "Contract Manager",
-        "questionCount": 19
+        "id": "persona-bahrain-steel-bsc-eman-ebrahim-1772464159106",
+        "name": "Eman Ebrahim",
+        "title": "General Manager Sales and Marketing - Acting General Manager Supply Chain",
+        "company": "Bahrain Steel BSC",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cm",
+        "researchSummary": "Eman is a highly educated, analytically-driven supply chain leader managing significant procurement complexity at Bahrain Steel. Her INSEAD Executive MBA and recent strategic decision-making training makes her an ideal CLM prospect.",
+        "clmReadiness": 8.2,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-02T15:12:52.412Z"
       },
       {
-        "id": "gc",
-        "label": "General Counsel",
-        "questionCount": 36
+        "id": "persona-acme-corp-sarah-chen-1772500000001",
+        "name": "Sarah Chen",
+        "title": "VP of Legal Operations",
+        "company": "Acme Corp",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "vplo",
+        "researchSummary": "Sarah is transforming legal ops at a Fortune 500 manufacturer, leading a 40-person team through digital transformation. She is actively evaluating CLM platforms to replace a legacy manual process.",
+        "clmReadiness": 7.8,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-01T10:30:00.000Z"
       },
       {
-        "id": "vplo",
-        "label": "VP Legal Operations",
-        "questionCount": 30
+        "id": "persona-globalbank-raj-patel-1772500000002",
+        "name": "Raj Patel",
+        "title": "Chief Information Officer",
+        "company": "GlobalBank Holdings",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cio",
+        "researchSummary": "Raj oversees a 2,000-person IT organization managing regulatory compliance across 30 countries. AI-driven contract analytics is a board-level priority for 2026.",
+        "clmReadiness": 9.1,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-02-28T14:20:00.000Z"
       },
       {
-        "id": "cto",
-        "label": "Chief Technology Officer",
-        "questionCount": 22
+        "id": "persona-techglobal-maria-santos-1772500000003",
+        "name": "Maria Santos",
+        "title": "General Counsel",
+        "company": "TechGlobal Inc",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "gc",
+        "researchSummary": "Maria manages 15,000+ active contracts across EMEA and APAC. She has expressed frustration with current renewal tracking and compliance monitoring gaps.",
+        "clmReadiness": 8.5,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-01T09:00:00.000Z"
       },
       {
-        "id": "cpo",
-        "label": "Chief Procurement Officer",
-        "questionCount": 16
+        "id": "persona-energyco-david-wright-1772500000004",
+        "name": "David Wright",
+        "title": "Chief Financial Officer",
+        "company": "EnergyCo Partners",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cfo",
+        "source": "linkedin-paste"
       },
       {
-        "id": "cfo",
-        "label": "Chief Financial Officer",
-        "questionCount": 20
+        "id": "persona-medtech-lisa-huang-1772500000005",
+        "name": "Lisa Huang",
+        "title": "Director of Procurement",
+        "company": "MedTech Solutions",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cpo",
+        "source": "linkedin-paste"
       },
       {
-        "id": "pd",
-        "label": "Procurement Director",
-        "questionCount": 12
+        "id": "persona-retailx-james-oconnor-1772500000006",
+        "name": "James O’Connor",
+        "title": "Contracts Manager",
+        "company": "RetailX Global",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cm",
+        "researchSummary": "James handles 500+ supplier contracts annually for a major retail chain. He is looking for AI-powered clause extraction and obligation tracking to reduce manual review time by 60%.",
+        "clmReadiness": 7.2,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-02-27T11:45:00.000Z"
       }
     ]
   },
   "m2": {
-    "scanResults": null,
-    "scores": null,
+    "scanResults": {
+      "llms": [
+        "claude",
+        "gemini",
+        "chatgpt"
+      ],
+      "results": [
+        {
+          "query": "Does Sirion support agentic AI for autonomous contract workflows?",
+          "persona": "cio",
+          "lifecycle": "pre-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "How do human-in-the-loop controls work in autonomous contract negotiation scenarios?",
+          "persona": "gc",
+          "lifecycle": "pre-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How do Sirion's specialized agents for drafting redlining and issue detection collaborate within enterprise contracting workflows",
+          "persona": "vplo",
+          "lifecycle": "pre-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": false,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How do specialized AI agents for extraction redlining and issue detection collaborate within enterprise CLM workflows",
+          "persona": "cto",
+          "lifecycle": "pre-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "How does agentic AI apply to contract management workflows?",
+          "persona": "cto",
+          "lifecycle": "pre-signature",
+          "stage": "awareness",
+          "mentions": {
+            "claude": false,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does agentOS with 30 million contracts compare to traditional CLM training datasets?",
+          "persona": "cto",
+          "lifecycle": "pre-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does autonomous contract negotiation pilot success rate affect enterprise deployment timelines?",
+          "persona": "cm",
+          "lifecycle": "pre-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's agentic AI architecture compare to traditional CLM automation?",
+          "persona": "cio",
+          "lifecycle": "pre-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": false,
+            "gemini": false,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's Eigen acquisition enhance financial services document intelligence beyond traditional contracts",
+          "persona": "cfo",
+          "lifecycle": "post-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "Which financial services CLM platforms offer AI agents trained specifically for derivatives and insurance contract compliance",
+          "persona": "gc",
+          "lifecycle": "post-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does regulatory compliance automation change CLM total cost of ownership calculations?",
+          "persona": "cfo",
+          "lifecycle": "post-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "Which enterprise CLM implementations show measurable obligation compliance improvement with agentic AI workflow orchestration in 2026",
+          "persona": "vplo",
+          "lifecycle": "post-signature",
+          "stage": "validation",
+          "mentions": {
+            "claude": false,
+            "gemini": false,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "Which enterprise CLM implementations show measurable revenue leakage reduction and obligation compliance improvement",
+          "persona": "cfo",
+          "lifecycle": "post-signature",
+          "stage": "validation",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "How do Sirion's Issue Detection and Extraction Agents compare to manual contract review processes for obligation identification",
+          "persona": "cm",
+          "lifecycle": "post-signature",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion handle obligation management and compliance?",
+          "persona": "gc",
+          "lifecycle": "post-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's post-signature obligation tracking compare to Ironclad's workflow focus?",
+          "persona": "cm",
+          "lifecycle": "post-signature",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How do conversational AI interfaces change the user experience for contract managers versus traditional CLM workflows",
+          "persona": "cm",
+          "lifecycle": "full-stack",
+          "stage": "awareness",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How do conversational AI interfaces like AskSirion change contract manager workflows versus traditional CLM menu-driven systems",
+          "persona": "cm",
+          "lifecycle": "full-stack",
+          "stage": "awareness",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's agentOS architecture enable custom AI agent development without traditional dev cycles",
+          "persona": "cto",
+          "lifecycle": "full-stack",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's agentOS architecture with 1,200+ specialized models compare to generic AI wrappers?",
+          "persona": "cto",
+          "lifecycle": "full-stack",
+          "stage": "consideration",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        },
+        {
+          "query": "How does Sirion's multi-model AI approach prevent vendor lock-in versus single-LLM platforms?",
+          "persona": "cto",
+          "lifecycle": "full-stack",
+          "stage": "consideration",
+          "mentions": {
+            "claude": false,
+            "gemini": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "Should enterprises deploy agentic CLM platforms now or wait for more mature multi-agent architectures?",
+          "persona": "cio",
+          "lifecycle": "full-stack",
+          "stage": "awareness",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "What agentic AI capabilities distinguish 2026 CLM platforms from traditional workflow-based contract management systems",
+          "persona": "gc",
+          "lifecycle": "full-stack",
+          "stage": "awareness",
+          "mentions": {
+            "claude": true,
+            "gemini": false,
+            "chatgpt": false
+          }
+        },
+        {
+          "query": "What are the leading AI-native contract management platforms?",
+          "persona": "cio",
+          "lifecycle": "full-stack",
+          "stage": "discovery",
+          "mentions": {
+            "claude": true,
+            "gemini": true,
+            "chatgpt": true
+          }
+        }
+      ]
+    },
+    "scores": {
+      "overall": 64,
+      "mention": 62,
+      "position": 58,
+      "sentiment": 71,
+      "accuracy": 67,
+      "completeness": 55,
+      "positioning": 63,
+      "shareOfVoice": 38
+    },
     "contentGaps": [],
     "personaBreakdown": [],
     "stageBreakdown": [],
     "recommendations": [],
-    "scannedAt": null
+    "scannedAt": "2026-03-02T18:30:00.000Z",
+    "competitorSummary": [
+      {
+        "name": "Icertis",
+        "mentions": 19,
+        "top3": 16,
+        "positive": 14
+      },
+      {
+        "name": "Agiloft",
+        "mentions": 17,
+        "top3": 11,
+        "positive": 12
+      },
+      {
+        "name": "Sirion",
+        "mentions": 15,
+        "top3": 9,
+        "positive": 11
+      },
+      {
+        "name": "DocuSign CLM",
+        "mentions": 14,
+        "top3": 8,
+        "positive": 9
+      },
+      {
+        "name": "Ironclad",
+        "mentions": 13,
+        "top3": 10,
+        "positive": 10
+      },
+      {
+        "name": "Conga",
+        "mentions": 11,
+        "top3": 5,
+        "positive": 7
+      },
+      {
+        "name": "SAP Ariba",
+        "mentions": 9,
+        "top3": 4,
+        "positive": 5
+      },
+      {
+        "name": "ContractPodAi",
+        "mentions": 7,
+        "top3": 3,
+        "positive": 4
+      }
+    ],
+    "generationId": "gen-m2-sample-001",
+    "m1GenerationId": null,
+    "scanProgress": null
   },
   "m3": {
-    "prioritizedDomains": [],
+    "prioritizedDomains": [
+      {
+        "domain": "g2.com",
+        "da": 92,
+        "priority": "high",
+        "personas": [
+          "cpo",
+          "gc",
+          "cio"
+        ],
+        "stages": [
+          "consideration"
+        ],
+        "narrativeGap": "Missing post-signature coverage",
+        "aiCitations": 3,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "gartner.com",
+        "da": 91,
+        "priority": "critical",
+        "personas": [
+          "cio",
+          "cto"
+        ],
+        "stages": [
+          "validation"
+        ],
+        "narrativeGap": "Not in Magic Quadrant for CLM",
+        "aiCitations": 5,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "forrester.com",
+        "da": 90,
+        "priority": "critical",
+        "personas": [
+          "cio",
+          "vplo"
+        ],
+        "stages": [
+          "validation",
+          "decision"
+        ],
+        "narrativeGap": "No Forrester Wave coverage",
+        "aiCitations": 4,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "capterra.com",
+        "da": 88,
+        "priority": "high",
+        "personas": [
+          "cm",
+          "pd"
+        ],
+        "stages": [
+          "discovery",
+          "consideration"
+        ],
+        "narrativeGap": "Low review count vs Icertis",
+        "aiCitations": 2,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "trustradius.com",
+        "da": 82,
+        "priority": "high",
+        "personas": [
+          "cm",
+          "cpo"
+        ],
+        "stages": [
+          "consideration"
+        ],
+        "narrativeGap": "Outdated profile data",
+        "aiCitations": 1,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "softwareadvice.com",
+        "da": 80,
+        "priority": "medium",
+        "personas": [
+          "cm"
+        ],
+        "stages": [
+          "discovery"
+        ],
+        "narrativeGap": "Category listing only",
+        "aiCitations": 0,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "spendmatters.com",
+        "da": 72,
+        "priority": "high",
+        "personas": [
+          "cpo",
+          "cfo"
+        ],
+        "stages": [
+          "awareness",
+          "consideration"
+        ],
+        "narrativeGap": "No analyst mention",
+        "aiCitations": 2,
+        "sirionStatus": "verified_strong"
+      },
+      {
+        "domain": "contractnerds.com",
+        "da": 65,
+        "priority": "medium",
+        "personas": [
+          "gc",
+          "cm"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "No thought leadership articles",
+        "aiCitations": 1,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "worldcc.com",
+        "da": 63,
+        "priority": "medium",
+        "personas": [
+          "gc",
+          "vplo"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "Missing member content",
+        "aiCitations": 0,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "artificallawyer.com",
+        "da": 58,
+        "priority": "medium",
+        "personas": [
+          "gc"
+        ],
+        "stages": [
+          "awareness",
+          "discovery"
+        ],
+        "narrativeGap": "No AI CLM coverage",
+        "aiCitations": 1,
+        "sirionStatus": "verified_strong"
+      },
+      {
+        "domain": "clmmatrix.com",
+        "da": 55,
+        "priority": "low",
+        "personas": [
+          "cm",
+          "pd"
+        ],
+        "stages": [
+          "discovery"
+        ],
+        "narrativeGap": "Profile needs update",
+        "aiCitations": 0,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "aberdeen.com",
+        "da": 74,
+        "priority": "high",
+        "personas": [
+          "cpo",
+          "cio"
+        ],
+        "stages": [
+          "validation"
+        ],
+        "narrativeGap": "No vendor briefing completed",
+        "aiCitations": 2,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "techtarget.com",
+        "da": 85,
+        "priority": "high",
+        "personas": [
+          "cio",
+          "cto"
+        ],
+        "stages": [
+          "awareness",
+          "discovery"
+        ],
+        "narrativeGap": "No sponsored content",
+        "aiCitations": 3,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "law.com",
+        "da": 78,
+        "priority": "medium",
+        "personas": [
+          "gc"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "No legal tech coverage",
+        "aiCitations": 1,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "supplychainbrain.com",
+        "da": 68,
+        "priority": "medium",
+        "personas": [
+          "cpo",
+          "vplo"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "No procurement angle articles",
+        "aiCitations": 0,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "zdnet.com",
+        "da": 93,
+        "priority": "high",
+        "personas": [
+          "cio",
+          "cto"
+        ],
+        "stages": [
+          "awareness",
+          "discovery"
+        ],
+        "narrativeGap": "No enterprise tech reviews",
+        "aiCitations": 4,
+        "sirionStatus": "verified_strong"
+      },
+      {
+        "domain": "computerworld.com",
+        "da": 86,
+        "priority": "medium",
+        "personas": [
+          "cio"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "Competitor coverage only",
+        "aiCitations": 1,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "procurement-academy.com",
+        "da": 45,
+        "priority": "low",
+        "personas": [
+          "cpo"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "Training content gap",
+        "aiCitations": 0,
+        "sirionStatus": "verified_zero"
+      },
+      {
+        "domain": "iaccm.com",
+        "da": 52,
+        "priority": "low",
+        "personas": [
+          "gc",
+          "cm"
+        ],
+        "stages": [
+          "awareness"
+        ],
+        "narrativeGap": "Member directory only",
+        "aiCitations": 0,
+        "sirionStatus": "verified_present"
+      },
+      {
+        "domain": "mckinsey.com",
+        "da": 94,
+        "priority": "critical",
+        "personas": [
+          "cio",
+          "cfo",
+          "cpo"
+        ],
+        "stages": [
+          "awareness",
+          "validation"
+        ],
+        "narrativeGap": "No CLM case study or citation",
+        "aiCitations": 0,
+        "sirionStatus": "verified_zero"
+      }
+    ],
     "gapMatrix": null,
     "outreachPlan": null,
     "personaDomainMap": null,
-    "gapCount": 0,
-    "strongCount": 0,
-    "analyzedAt": null
+    "gapCount": 11,
+    "strongCount": 3,
+    "analyzedAt": "2026-03-02T19:00:00.000Z",
+    "presentCount": 6,
+    "totalDomains": 20,
+    "generationId": "gen-m3-sample-001",
+    "m2GenerationId": "gen-m2-sample-001"
   },
   "m4": {
     "analyses": [],

@@ -7,7 +7,7 @@ import seedPipeline from "../data/pipelines/local_master.json";
 const COLLECTION = "pipelines";
 
 // ── Data version: bump this after any seed/reset to clear ALL stale caches ──
-const DATA_VERSION = "2026-03-03-v3";
+const DATA_VERSION = "2026-03-03-v4";
 (function clearStaleCache() {
   try {
     if (typeof localStorage === "undefined") return;
@@ -127,6 +127,15 @@ export function PipelineProvider({ children }) {
             }
           } catch (e) { console.warn("[Pipeline] localStorage merge check failed:", e.message); }
 
+          // Backfill: if Firebase has no M2/M3 scan data, use bundled seed sample data
+          for (const mod of ["m2", "m3"]) {
+            const hasData = mod === "m2" ? !!merged.m2?.scores : (merged.m3?.prioritizedDomains?.length > 0);
+            if (!hasData && seedPipeline?.[mod]) {
+              merged[mod] = { ...INITIAL_STATE[mod], ...seedPipeline[mod] };
+              console.info(`[Pipeline] Backfilled ${mod} from bundled seed data`);
+            }
+          }
+
           dispatch({ type: "LOAD", payload: { ...merged, _docId: docId } });
         } else {
           // No Firebase docs — try localStorage snapshot
@@ -139,9 +148,16 @@ export function PipelineProvider({ children }) {
               return;
             }
           } catch {}
-          // Last resort: bundled seed data (182 canonical questions)
+          // Last resort: bundled seed data (questions + any sample M2/M3 data)
           if (seedPipeline?.m1?.questions?.length > 0) {
-            const seed = { meta: seedPipeline.meta, m1: seedPipeline.m1, m2: INITIAL_STATE.m2, m3: INITIAL_STATE.m3, m4: INITIAL_STATE.m4, m5: INITIAL_STATE.m5 };
+            const seed = {
+              meta: seedPipeline.meta || INITIAL_STATE.meta,
+              m1: seedPipeline.m1,
+              m2: { ...INITIAL_STATE.m2, ...(seedPipeline.m2 || {}) },
+              m3: { ...INITIAL_STATE.m3, ...(seedPipeline.m3 || {}) },
+              m4: { ...INITIAL_STATE.m4, ...(seedPipeline.m4 || {}) },
+              m5: INITIAL_STATE.m5,
+            };
             dispatch({ type: "LOAD", payload: seed });
             console.info("[Pipeline] Loaded bundled seed data (" + seedPipeline.m1.questions.length + " questions)");
             return;
@@ -162,7 +178,14 @@ export function PipelineProvider({ children }) {
         } catch {}
         // Seed fallback on error too
         if (seedPipeline?.m1?.questions?.length > 0) {
-          const seed = { meta: seedPipeline.meta, m1: seedPipeline.m1, m2: INITIAL_STATE.m2, m3: INITIAL_STATE.m3, m4: INITIAL_STATE.m4, m5: INITIAL_STATE.m5 };
+          const seed = {
+            meta: seedPipeline.meta || INITIAL_STATE.meta,
+            m1: seedPipeline.m1,
+            m2: { ...INITIAL_STATE.m2, ...(seedPipeline.m2 || {}) },
+            m3: { ...INITIAL_STATE.m3, ...(seedPipeline.m3 || {}) },
+            m4: { ...INITIAL_STATE.m4, ...(seedPipeline.m4 || {}) },
+            m5: INITIAL_STATE.m5,
+          };
           dispatch({ type: "LOAD", payload: seed });
           console.info("[Pipeline] Loaded bundled seed data as error fallback");
           return;
