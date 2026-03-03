@@ -37,8 +37,9 @@ const useIsMobile = () => {
 
 /* ── Dashboard — Sirion Growth Command Center ── */
 function Dashboard({ t, onNavigate }) {
-  const { getStatus, pipeline: ps } = usePipeline();
+  const { getStatus, getStaleness, pipeline: ps } = usePipeline();
   const status = getStatus();
+  const staleness = getStaleness ? getStaleness() : {};
 
   const fmtTime = (iso) => {
     if (!iso) return null;
@@ -50,6 +51,9 @@ function Dashboard({ t, onNavigate }) {
   const m3 = status.m3 || {};
   const m4 = status.m4 || {};
   const m5 = status.m5 || {};
+
+  // M2 scan progress (real-time during active scans)
+  const scanProgress = ps?.m2?.scanProgress;
 
   const m1Personas = ps?.m1?.personaProfiles || [];
   const researchedPersonas = m1Personas.filter(p => p.researchSummary);
@@ -350,6 +354,33 @@ function Dashboard({ t, onNavigate }) {
         ))}
       </div>
 
+      {/* ── Staleness Warnings + Scan Progress ── */}
+      {(staleness.m2 || staleness.m3 || scanProgress) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+          {scanProgress && (
+            <div style={{ ...card({ padding: "12px 16px" }), borderLeft: `3px solid ${t.client}`, display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.client, fontFamily: "var(--mono)" }}>SCANNING</span>
+              <span style={{ fontSize: 12, color: t.text }}>{scanProgress.completed} / {scanProgress.total} questions scanned</span>
+              <div style={{ flex: 1, height: 4, background: t.border, borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${Math.round((scanProgress.completed / scanProgress.total) * 100)}%`, height: "100%", background: t.client, borderRadius: 2, transition: "width 0.3s" }} />
+              </div>
+            </div>
+          )}
+          {staleness.m2 && (
+            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M2 scan used older questions</span>
+              <span style={{ fontSize: 11, color: t.textDim }}>Questions changed since last scan. Re-scan recommended.</span>
+            </div>
+          )}
+          {staleness.m3 && (
+            <div style={{ ...card({ padding: "10px 16px" }), borderLeft: "3px solid #f59e0b", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "#f59e0b", fontWeight: 600 }}>M3 analysis used older scan</span>
+              <span style={{ fontSize: 11, color: t.textDim }}>Perception scan changed since last authority analysis.</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Analytics Charts ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
         {/* AI Visibility by LLM — Radar Chart */}
@@ -509,12 +540,24 @@ function Dashboard({ t, onNavigate }) {
 
 /* ── Settings Page ── */
 function SettingsPage({ t }) {
-  const [apiKey, setApiKey] = useState(import.meta.env.VITE_ANTHROPIC_API_KEY ? "\u2022".repeat(20) : "");
-  const [firebaseProject, setFirebaseProject] = useState(import.meta.env.VITE_FIREBASE_PROJECT_ID || "");
+  const [anthropicKey, setAnthropicKey] = useState(localStorage.getItem("xt_anthropic_key") || "");
+  const [geminiKey, setGeminiKey] = useState(localStorage.getItem("xt_gemini_key") || "");
+  const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("xt_openai_key") || "");
+  const [perplexityKey, setPerplexityKey] = useState(localStorage.getItem("xt_perplexity_key") || "");
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    if (anthropicKey) localStorage.setItem("xt_anthropic_key", anthropicKey); else localStorage.removeItem("xt_anthropic_key");
+    if (geminiKey) localStorage.setItem("xt_gemini_key", geminiKey); else localStorage.removeItem("xt_gemini_key");
+    if (openaiKey) localStorage.setItem("xt_openai_key", openaiKey); else localStorage.removeItem("xt_openai_key");
+    if (perplexityKey) localStorage.setItem("xt_perplexity_key", perplexityKey); else localStorage.removeItem("xt_perplexity_key");
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
 
   const inp = {
     background: t.inputBg, border: `1px solid ${t.inputBorder}`, borderRadius: 8,
-    padding: "10px 14px", color: t.text, fontSize: 13, fontFamily: "var(--body)",
+    padding: "10px 14px", color: t.text, fontSize: 13, fontFamily: "var(--mono)",
     width: "100%", outline: "none",
   };
   const label = { fontSize: 11, fontWeight: 600, color: t.textSec, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8, display: "block" };
@@ -525,22 +568,38 @@ function SettingsPage({ t }) {
         <span style={{ fontSize: 11, fontWeight: 600, color: t.sectionNum, textTransform: "uppercase", letterSpacing: 2, fontFamily: "var(--mono)" }}>Configuration</span>
         <h2 style={{ margin: "8px 0 0", fontSize: 24, fontWeight: 800, color: t.text, letterSpacing: -0.5 }}>Global Settings</h2>
         <p style={{ margin: "8px 0 0", fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
-          Manage API keys, Firebase connection, and platform preferences.
+          Manage API keys and platform preferences. Keys are stored in your browser.
         </p>
       </div>
 
       {/* API Configuration */}
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 24, marginBottom: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>API Configuration</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>API Keys</div>
         <div style={{ marginBottom: 16 }}>
-          <label style={label}>Anthropic API Key</label>
-          <input value={apiKey} readOnly style={{ ...inp, color: t.textDim }} />
-          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Configured via .env file (VITE_ANTHROPIC_API_KEY)</div>
+          <label style={label}>Anthropic API Key (Claude)</label>
+          <input value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-..." type="password" style={inp} />
         </div>
-        <div>
-          <label style={label}>Firebase Project ID</label>
-          <input value={firebaseProject} readOnly style={{ ...inp, color: t.textDim }} />
-          <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Configured via .env file (VITE_FIREBASE_PROJECT_ID)</div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>Google Gemini API Key</label>
+          <input value={geminiKey} onChange={e => setGeminiKey(e.target.value)} placeholder="AIza..." type="password" style={inp} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>OpenAI API Key</label>
+          <input value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} placeholder="sk-..." type="password" style={inp} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>Perplexity API Key</label>
+          <input value={perplexityKey} onChange={e => setPerplexityKey(e.target.value)} placeholder="pplx-..." type="password" style={inp} />
+        </div>
+        <button onClick={handleSave} style={{
+          padding: "10px 24px", borderRadius: 8, border: "none", fontWeight: 700, fontSize: 13,
+          background: saved ? "#34d399" : t.brand, color: "#fff", cursor: "pointer",
+          fontFamily: "var(--mono)", transition: "background 0.2s",
+        }}>
+          {saved ? "Saved" : "Save API Keys"}
+        </button>
+        <div style={{ fontSize: 11, color: t.textDim, marginTop: 8 }}>
+          Keys are stored in your browser's localStorage. They never leave your device.
         </div>
       </div>
 

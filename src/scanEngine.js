@@ -19,9 +19,10 @@ import { getAnthropicKey, getAnthropicHeaders } from "./claudeApi";
 const getKey = () => getAnthropicKey();
 const getHeaders = () => getAnthropicHeaders();
 
-const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
-const OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
-const PERPLEXITY_KEY = import.meta.env.VITE_PERPLEXITY_API_KEY || "";
+// Read keys at call-time so Settings UI changes take effect immediately
+const getGeminiKey = () => localStorage.getItem("xt_gemini_key") || import.meta.env.VITE_GEMINI_API_KEY || "";
+const getOpenaiKey = () => localStorage.getItem("xt_openai_key") || import.meta.env.VITE_OPENAI_API_KEY || "";
+const getPerplexityKey = () => localStorage.getItem("xt_perplexity_key") || import.meta.env.VITE_PERPLEXITY_API_KEY || "";
 
 /* ───────────────────────────────────────────────
    RETRY ENGINE — Exponential backoff with jitter
@@ -156,11 +157,11 @@ async function askClaude(question, onRetry, timeoutMs = 90000) {
 }
 
 async function askGemini(question, onRetry, timeoutMs = 45000) {
-  if (!GEMINI_KEY) return { ok: false, error: "No API key" };
+  if (!getGeminiKey()) return { ok: false, error: "No API key" };
   await throttle("gemini");
   try {
     const res = await fetchWithRetry(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${getGeminiKey()}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -185,14 +186,14 @@ async function askGemini(question, onRetry, timeoutMs = 45000) {
 }
 
 async function askOpenAI(question, onRetry, timeoutMs = 60000) {
-  if (!OPENAI_KEY) return { ok: false, error: "No API key" };
+  if (!getOpenaiKey()) return { ok: false, error: "No API key" };
   await throttle("openai");
   try {
     const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_KEY}`,
+        "Authorization": `Bearer ${getOpenaiKey()}`,
       },
       body: JSON.stringify({
         model: "gpt-4o",
@@ -213,14 +214,14 @@ async function askOpenAI(question, onRetry, timeoutMs = 60000) {
 }
 
 async function askPerplexity(question, onRetry, timeoutMs = 45000) {
-  if (!PERPLEXITY_KEY) return { ok: false, error: "No API key" };
+  if (!getPerplexityKey()) return { ok: false, error: "No API key" };
   await throttle("perplexity");
   try {
     const res = await fetchWithRetry("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${PERPLEXITY_KEY}`,
+        "Authorization": `Bearer ${getPerplexityKey()}`,
       },
       body: JSON.stringify({
         model: "sonar",
@@ -267,7 +268,7 @@ export async function testConnections() {
   }
 
   // Gemini
-  if (GEMINI_KEY) {
+  if (getGeminiKey()) {
     try {
       const r = await askGemini("Say hello in one word.");
       results.gemini = r.ok ? "connected" : "error";
@@ -277,7 +278,7 @@ export async function testConnections() {
   }
 
   // OpenAI
-  if (OPENAI_KEY) {
+  if (getOpenaiKey()) {
     try {
       const r = await askOpenAI("Say hello in one word.");
       results.openai = r.ok ? "connected" : "error";
@@ -287,7 +288,7 @@ export async function testConnections() {
   }
 
   // Perplexity
-  if (PERPLEXITY_KEY) {
+  if (getPerplexityKey()) {
     try {
       const r = await askPerplexity("Say hello in one word.");
       results.perplexity = r.ok ? "connected" : "error";
@@ -302,9 +303,9 @@ export async function testConnections() {
 export function getAvailableLLMs() {
   const available = [];
   if (getKey()) available.push("claude");
-  if (GEMINI_KEY) available.push("gemini");
-  if (OPENAI_KEY) available.push("openai");
-  if (PERPLEXITY_KEY) available.push("perplexity");
+  if (getGeminiKey()) available.push("gemini");
+  if (getOpenaiKey()) available.push("openai");
+  if (getPerplexityKey()) available.push("perplexity");
   return available;
 }
 
