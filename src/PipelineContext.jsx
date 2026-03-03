@@ -1,6 +1,8 @@
 import { createContext, useContext, useReducer, useEffect, useRef, useCallback, useMemo } from "react";
 import { db, loadApiKeys } from "./firebase.js";
 import { createPersistenceManager } from "./persistenceManager.js";
+// Seed data bundled at build time — used as fallback when Firebase + localStorage are empty
+import seedPipeline from "../data/pipelines/local_master.json";
 
 const COLLECTION = "pipelines";
 
@@ -26,7 +28,7 @@ const INITIAL_STATE = {
   _saving: false,
   meta: { company: "Sirion", url: "https://sirion.ai", industry: "Contract Lifecycle Management" },
   // Phase 3: generationId fields track data freshness across modules
-  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [], generationId: null },
+  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [], decisionScores: {}, generationId: null },
   m2: { scanResults: null, scores: null, contentGaps: [], personaBreakdown: [], stageBreakdown: [], recommendations: [], scannedAt: null, scanProgress: null, generationId: null, m1GenerationId: null },
   m3: { prioritizedDomains: [], gapMatrix: null, outreachPlan: null, personaDomainMap: null, gapCount: 0, strongCount: 0, analyzedAt: null, generationId: null, m2GenerationId: null },
   m4: { analyses: [], latestStage: null, latestReadiness: null, analyzedAt: null, generationId: null },
@@ -137,6 +139,13 @@ export function PipelineProvider({ children }) {
               return;
             }
           } catch {}
+          // Last resort: bundled seed data (182 canonical questions)
+          if (seedPipeline?.m1?.questions?.length > 0) {
+            const seed = { meta: seedPipeline.meta, m1: seedPipeline.m1, m2: INITIAL_STATE.m2, m3: INITIAL_STATE.m3, m4: INITIAL_STATE.m4, m5: INITIAL_STATE.m5 };
+            dispatch({ type: "LOAD", payload: seed });
+            console.info("[Pipeline] Loaded bundled seed data (" + seedPipeline.m1.questions.length + " questions)");
+            return;
+          }
           dispatch({ type: "SET_LOADED" });
         }
       } catch (e) {
@@ -151,6 +160,13 @@ export function PipelineProvider({ children }) {
             return;
           }
         } catch {}
+        // Seed fallback on error too
+        if (seedPipeline?.m1?.questions?.length > 0) {
+          const seed = { meta: seedPipeline.meta, m1: seedPipeline.m1, m2: INITIAL_STATE.m2, m3: INITIAL_STATE.m3, m4: INITIAL_STATE.m4, m5: INITIAL_STATE.m5 };
+          dispatch({ type: "LOAD", payload: seed });
+          console.info("[Pipeline] Loaded bundled seed data as error fallback");
+          return;
+        }
         dispatch({ type: "SET_LOADED" });
       }
     })();
