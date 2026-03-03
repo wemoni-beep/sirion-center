@@ -13,7 +13,11 @@
    - HTTP status-aware retry (429/529/503/500)
    ═══════════════════════════════════════════════════════════ */
 
-import { ANTHROPIC_KEY, ANTHROPIC_HEADERS } from "./claudeApi";
+import { getAnthropicKey, getAnthropicHeaders } from "./claudeApi";
+
+// Read key/headers at call-time (supports Settings UI + localStorage)
+const getKey = () => getAnthropicKey();
+const getHeaders = () => getAnthropicHeaders();
 
 const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 const OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY || "";
@@ -129,12 +133,12 @@ Respond exactly as you would for any real user asking this question:
 const LLM_MAX_TOKENS = 1200; // Enough for a solid 350-450 word response (cost-optimized)
 
 async function askClaude(question, onRetry, timeoutMs = 90000) {
-  if (!ANTHROPIC_KEY) return { ok: false, error: "No API key" };
+  if (!getKey()) return { ok: false, error: "No API key" };
   await throttle("claude");
   try {
     const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: ANTHROPIC_HEADERS,
+      headers: getHeaders(),
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: LLM_MAX_TOKENS,
@@ -253,7 +257,7 @@ export async function testConnections() {
   const results = {};
 
   // Claude
-  if (ANTHROPIC_KEY) {
+  if (getKey()) {
     try {
       const r = await askClaude("Say hello in one word.");
       results.claude = r.ok ? "connected" : "error";
@@ -297,7 +301,7 @@ export async function testConnections() {
 
 export function getAvailableLLMs() {
   const available = [];
-  if (ANTHROPIC_KEY) available.push("claude");
+  if (getKey()) available.push("claude");
   if (GEMINI_KEY) available.push("gemini");
   if (OPENAI_KEY) available.push("openai");
   if (PERPLEXITY_KEY) available.push("perplexity");
@@ -372,11 +376,11 @@ Return a JSON object with keys: ${llmKeys.map(k => `"${k}"`).join(", ")}
 Each value must follow the analysis schema. Return JSON only.`;
 
   try {
-    if (!ANTHROPIC_KEY) throw new Error("Claude API needed for analysis — add VITE_ANTHROPIC_API_KEY to .env");
+    if (!getKey()) throw new Error("Claude API needed for analysis — add VITE_ANTHROPIC_API_KEY to .env");
     await throttle("claude");
     const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: ANTHROPIC_HEADERS,
+      headers: getHeaders(),
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 1800,

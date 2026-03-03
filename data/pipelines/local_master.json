@@ -2940,7 +2940,7 @@
       "Post-Signature / Obligations",
       "Procurement CLM"
     ],
-    "generatedAt": "2026-03-03T07:44:51.506Z",
+    "generatedAt": "2026-03-03T08:09:40.871Z",
     "personaProfiles": [
       {
         "id": "cio",
@@ -3013,6 +3013,6 @@
     "leadData": null,
     "generatedAt": null
   },
-  "created_at": "2026-03-03T07:44:51.507Z",
-  "updated_at": "2026-03-03T07:44:51.507Z"
+  "created_at": "2026-03-03T08:09:40.872Z",
+  "updated_at": "2026-03-03T08:09:40.872Z"
 }
