@@ -3483,10 +3483,11 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                 {/* 2-column: Stage Funnel (left) | Persona Bars (right) */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 16, alignItems: "start" }}>
 
-                  {/* ── STAGE FUNNEL ─────────────────────── */}
+                  {/* ── STAGE FUNNEL (standard marketing shape) ── */}
                   {(() => {
                     const totalQs = questions.length;
-                    const maxStageCount = Math.max(...STAGES.map(s => stageCount[s.id] || 0), 1);
+                    /* Fixed funnel widths: classic marketing funnel taper, NOT driven by question count */
+                    const funnelWidths = [100, 84, 68, 52, 38];
                     return (
                       <div style={{
                         background: t.bgCard, border: `1px solid ${t.border}`,
@@ -3498,24 +3499,23 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                         <div style={{ fontSize: 22, fontWeight: 800, color: t.text, fontFamily: "var(--mono)", marginBottom: 14 }}>
                           {totalQs} <span style={{ fontSize: 11, fontWeight: 500, color: t.textDim }}>questions</span>
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                           {STAGES.map((s, idx) => {
                             const count = stageCount[s.id] || 0;
                             const pct = totalQs > 0 ? Math.round((count / totalQs) * 100) : 0;
-                            /* Funnel: widest bar = 100%, others proportional; minimum 30% */
-                            const barW = Math.max(30, (count / maxStageCount) * 100);
-                            const isHovered = filterStage === s.id;
+                            const barW = funnelWidths[idx];
+                            const isActive = filterStage === s.id;
+                            /* Gradient intensity based on stage position */
+                            const bgAlpha = isActive ? "20" : (t.mode === "dark" ? "0a" : "08");
                             return (
                               <div key={s.id}
                                 onClick={() => setFilterStage(filterStage === s.id ? "all" : s.id)}
                                 style={{
                                   width: `${barW}%`, cursor: "pointer",
-                                  background: isHovered
-                                    ? `${s.color}25`
-                                    : (t.mode === "dark" ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
-                                  border: `1px solid ${isHovered ? s.color + "50" : t.border}`,
-                                  borderRadius: idx === 0 ? "8px 8px 4px 4px" : idx === STAGES.length - 1 ? "4px 4px 8px 8px" : 4,
-                                  padding: "7px 12px",
+                                  background: `${s.color}${bgAlpha}`,
+                                  border: `1px solid ${isActive ? s.color + "50" : s.color + "18"}`,
+                                  borderRadius: idx === 0 ? "10px 10px 4px 4px" : idx === STAGES.length - 1 ? "4px 4px 10px 10px" : 3,
+                                  padding: "8px 12px",
                                   display: "flex", alignItems: "center", justifyContent: "space-between",
                                   transition: "all 0.2s ease",
                                 }}>
@@ -3526,7 +3526,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                                     boxShadow: `0 0 6px ${s.color}60`,
                                   }} />
                                   <span style={{
-                                    fontSize: 10, fontWeight: 600, color: isHovered ? s.color : t.text,
+                                    fontSize: 10, fontWeight: 600, color: isActive ? s.color : t.text,
                                     fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 0.8,
                                   }}>
                                     {s.label}
