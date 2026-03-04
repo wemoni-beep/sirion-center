@@ -732,6 +732,71 @@ const VOLUME_CONFIG = {
   niche:  { label: "Niche",     color: "#a78bfa", bg: "rgba(167,139,250,0.10)" },
 };
 
+/* ── Importance Score Matrix ─────────────────────────────
+   Composite score (1-10) from 4 weighted dimensions:
+   - Stage position (35%): later stage = higher conversion intent
+   - Intent type (30%): vendor/decision queries > generic
+   - Volume tier (20%): high volume = more search traffic
+   - Persona fit (15%): how relevant to assigned persona
+   ──────────────────────────────────────────────────────── */
+const STAGE_WEIGHT   = { awareness: 3, discovery: 5, consideration: 7, decision: 9, validation: 10 };
+const INTENT_WEIGHT  = { generic: 2, category: 5, vendor: 8, decision: 10 };
+const VOLUME_WEIGHT  = { high: 8, medium: 5, niche: 3 };
+const IMPORTANCE_COLORS = {
+  stage:  "#a78bfa",  // purple
+  intent: "#4ade80",  // green
+  volume: "#fbbf24",  // amber
+  fit:    "#67e8f9",  // cyan
+};
+
+function computeImportance(q) {
+  const sw = STAGE_WEIGHT[q.stage] || 5;
+  const iw = INTENT_WEIGHT[q.intentType] || 4;
+  const vw = VOLUME_WEIGHT[q.volumeTier] || 5;
+  const fw = q.personaFit != null ? q.personaFit : 5;
+  const raw = sw * 0.35 + iw * 0.30 + vw * 0.20 + fw * 0.15;
+  const score = Math.max(1, Math.min(10, Math.round(raw)));
+  return { score, stage: sw, intent: iw, volume: vw, fit: fw };
+}
+
+/* Mini donut chart SVG component for importance visualization */
+function MiniDonut({ size = 38, score, stage, intent, volume, fit, theme }) {
+  const r = (size - 6) / 2;
+  const cx = size / 2, cy = size / 2;
+  const C = 2 * Math.PI * r;
+  const total = stage + intent + volume + fit;
+  const segments = [
+    { val: stage,  color: IMPORTANCE_COLORS.stage,  label: "Stage" },
+    { val: intent, color: IMPORTANCE_COLORS.intent, label: "Intent" },
+    { val: volume, color: IMPORTANCE_COLORS.volume, label: "Volume" },
+    { val: fit,    color: IMPORTANCE_COLORS.fit,    label: "Fit" },
+  ];
+  let offset = 0;
+  const scoreColor = score >= 8 ? "#4ade80" : score >= 5 ? "#fbbf24" : "#f87171";
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block" }}>
+      {segments.map((seg, i) => {
+        const len = (seg.val / total) * C;
+        const gap = 1.5;
+        const dash = Math.max(0, len - gap);
+        const el = (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color}
+            strokeWidth={4} strokeDasharray={`${dash} ${C - dash}`}
+            strokeDashoffset={-offset} strokeLinecap="round"
+            style={{ transition: "stroke-dasharray 0.3s, stroke-dashoffset 0.3s" }}
+            transform={`rotate(-90 ${cx} ${cy})`} />
+        );
+        offset += len;
+        return el;
+      })}
+      <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="central"
+        fill={scoreColor} fontSize={13} fontWeight={800} fontFamily="var(--mono)">
+        {score}
+      </text>
+    </svg>
+  );
+}
+
 /* ── AI Progress Steps ────────────────────────────────── */
 const AI_STEPS = [
   "Loading knowledge base\u2026",
@@ -821,6 +886,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const [activeClusters, setActiveClusters] = useState(new Set(CLUSTERS));
   const [hoveredBubble, setHoveredBubble] = useState(null);
   const [hoveredPersonaBar, setHoveredPersonaBar] = useState(null);
+  const [hoveredScore, setHoveredScore] = useState(null); // { qId, x, y, imp, q }
 
   // ── Sorted personas for influence funnel ──
   const sortedPersonas = useMemo(() => [...PERSONAS].sort((a, b) => b.influence - a.influence), []);
@@ -865,6 +931,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const [autoEnrichPending, setAutoEnrichPending] = useState(false); // auto-trigger after generation
   const [filterIntentType, setFilterIntentType] = useState("all");
   const [filterVolumeTier, setFilterVolumeTier] = useState("all");
+  const [filterCluster, setFilterCluster] = useState("all");
 
   // ── Decision Matrix state ──
   const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
@@ -1242,9 +1309,10 @@ export default function QuestionGenerator({ onNavigate }) {
       if (filterLifecycle !== "all" && (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack") !== filterLifecycle) return false;
       if (filterIntentType !== "all" && q.intentType !== filterIntentType) return false;
       if (filterVolumeTier !== "all" && q.volumeTier !== filterVolumeTier) return false;
+      if (filterCluster !== "all" && q.cluster !== filterCluster) return false;
       return true;
     });
-  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier]);
+  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier, filterCluster]);
 
   // When a specific profile is selected in the filter, show that persona's questions
   // (they live in personaGeneratedQs, not the main bank). Otherwise show filtered bank questions.
@@ -3690,108 +3758,119 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                 </div>
               </div>
 
-              {/* Filters & Actions */}
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-                <select value={filterStage} onChange={e => setFilterStage(e.target.value)}
-                  style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                  <option value="all">All Stages</option>
-                  {STAGES.map(s => <option key={s.id} value={s.id}>{s.label} ({stageCount[s.id] || 0})</option>)}
-                </select>
-
-                <select value={filterPersona} onChange={e => setFilterPersona(e.target.value)}
-                  style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                  <option value="all">All Personas</option>
-                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => {
-                    const profilesWithQs = personaProfiles.filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0);
-                    if (profilesWithQs.length === 0) {
-                      return <option key={p.id} value={p.id}>{p.label} ({personaCount[p.id] || 0})</option>;
-                    }
-                    return (
-                      <optgroup key={p.id} label={`${p.label} (${personaCount[p.id] || 0})`}>
-                        <option value={p.id}>All {p.short} questions</option>
-                        {profilesWithQs.map(pp => (
-                          <option key={pp.id} value={pp.id}>
-                            {pp.name} · {pp.company} ({profileQuestionCount[pp.id]})
-                          </option>
-                        ))}
-                      </optgroup>
-                    );
-                  })}
-                </select>
-
-                <select value={filterLifecycle} onChange={e => setFilterLifecycle(e.target.value)}
-                  style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                  <option value="all">All Lifecycle Stages</option>
-                  {CLM_LIFECYCLE.map(lc => <option key={lc.id} value={lc.id}>{lc.label} ({lifecycleCount[lc.id] || 0})</option>)}
-                </select>
-
-                {jurisdictions.length > 1 && (
-                  <select value={filterJurisdiction} onChange={e => setFilterJurisdiction(e.target.value)}
-                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                    <option value="all">All Jurisdictions</option>
-                    {jurisdictions.map(j => (
-                      <option key={j} value={j}>{j} ({questions.filter(q => (q.jurisdiction || "Global") === j).length})</option>
-                    ))}
+              {/* Filters — two rows: dropdowns + actions */}
+              <div style={{ marginBottom: 16 }}>
+                {/* Row 1: Filter dropdowns */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  <select value={filterStage} onChange={e => setFilterStage(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Stages</option>
+                    {STAGES.map(s => <option key={s.id} value={s.id}>{s.label} ({stageCount[s.id] || 0})</option>)}
                   </select>
-                )}
 
-                {questions.some(q => q.intentType) && (
-                  <select value={filterIntentType} onChange={e => setFilterIntentType(e.target.value)}
-                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                    <option value="all">All Intent Types</option>
-                    {Object.entries(INTENT_CONFIG).map(([k, v]) => (
-                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.intentType === k).length})</option>
-                    ))}
+                  <select value={filterPersona} onChange={e => setFilterPersona(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Personas</option>
+                    {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => {
+                      const profilesWithQs = personaProfiles.filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0);
+                      if (profilesWithQs.length === 0) {
+                        return <option key={p.id} value={p.id}>{p.label} ({personaCount[p.id] || 0})</option>;
+                      }
+                      return (
+                        <optgroup key={p.id} label={`${p.label} (${personaCount[p.id] || 0})`}>
+                          <option value={p.id}>All {p.short} questions</option>
+                          {profilesWithQs.map(pp => (
+                            <option key={pp.id} value={pp.id}>
+                              {pp.name} · {pp.company} ({profileQuestionCount[pp.id]})
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
                   </select>
-                )}
 
-                {questions.some(q => q.volumeTier) && (
-                  <select value={filterVolumeTier} onChange={e => setFilterVolumeTier(e.target.value)}
-                    style={{ ...inp, width: "auto", padding: "8px 12px", fontSize: 12, cursor: "pointer", background: t.inputBg }}>
-                    <option value="all">All Volume Tiers</option>
-                    {Object.entries(VOLUME_CONFIG).map(([k, v]) => (
-                      <option key={k} value={k}>{v.label} ({questions.filter(q => q.volumeTier === k).length})</option>
-                    ))}
+                  <select value={filterLifecycle} onChange={e => setFilterLifecycle(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Lifecycle</option>
+                    {CLM_LIFECYCLE.map(lc => <option key={lc.id} value={lc.id}>{lc.label} ({lifecycleCount[lc.id] || 0})</option>)}
                   </select>
-                )}
 
-                <div style={{ flex: 1 }} />
+                  <select value={filterCluster} onChange={e => setFilterCluster(e.target.value)}
+                    style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                    <option value="all">All Clusters</option>
+                    {CLUSTERS.map(c => {
+                      const cnt = questions.filter(q => q.cluster === c).length;
+                      return cnt > 0 ? <option key={c} value={c}>{c} ({cnt})</option> : null;
+                    })}
+                  </select>
 
-                <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                  {displayQuestions.filter(q => selectedQs.has(q.id)).length} / {displayQuestions.length} selected
-                </span>
+                  {jurisdictions.length > 1 && (
+                    <select value={filterJurisdiction} onChange={e => setFilterJurisdiction(e.target.value)}
+                      style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                      <option value="all">All Jurisdictions</option>
+                      {jurisdictions.map(j => (
+                        <option key={j} value={j}>{j} ({questions.filter(q => (q.jurisdiction || "Global") === j).length})</option>
+                      ))}
+                    </select>
+                  )}
 
-                <button onClick={() => setSelectedQs(new Set(displayQuestions.map(q => q.id)))}
-                  style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
-                  Select All
-                </button>
+                  {questions.some(q => q.intentType) && (
+                    <select value={filterIntentType} onChange={e => setFilterIntentType(e.target.value)}
+                      style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                      <option value="all">All Intent</option>
+                      {Object.entries(INTENT_CONFIG).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label} ({questions.filter(q => q.intentType === k).length})</option>
+                      ))}
+                    </select>
+                  )}
 
-                <button onClick={exportMarkdown}
-                  style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
-                  Copy Table
-                </button>
+                  {questions.some(q => q.volumeTier) && (
+                    <select value={filterVolumeTier} onChange={e => setFilterVolumeTier(e.target.value)}
+                      style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
+                      <option value="all">All Volume</option>
+                      {Object.entries(VOLUME_CONFIG).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label} ({questions.filter(q => q.volumeTier === k).length})</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
 
-                <button onClick={exportToM2}
-                  style={{
-                    padding: "6px 12px", borderRadius: 6,
-                    border: `1px solid ${exportCopied ? t.green : t.border}`,
-                    background: "transparent",
-                    color: exportCopied ? t.green : t.textSec, fontSize: 11, cursor: "pointer",
-                    fontFamily: "var(--mono)",
-                  }}>
-                  {exportCopied ? "\u2713 Synced to M2" : "\u21BB Sync to M2"}
-                </button>
+                {/* Row 2: Actions */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
+                    {displayQuestions.filter(q => selectedQs.has(q.id)).length} / {displayQuestions.length} selected
+                  </span>
+                  <div style={{ flex: 1 }} />
 
-                <button onClick={handleQuestionCleanup} disabled={cleanupLoading || questions.length === 0}
-                  style={{
-                    padding: "6px 12px", borderRadius: 6,
-                    border: "1px solid rgba(251,191,36,0.3)",
-                    background: cleanupPreview ? "rgba(251,191,36,0.1)" : "transparent",
-                    color: "#fbbf24", fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)",
-                    opacity: cleanupLoading || questions.length === 0 ? 0.5 : 1,
-                  }}>
-                  {cleanupLoading ? "Analyzing\u2026" : "\u2728 Cleanup"}
-                </button>
+                  <button onClick={() => setSelectedQs(new Set(displayQuestions.map(q => q.id)))}
+                    style={{ padding: "5px 10px", borderRadius: 5, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
+                    Select All
+                  </button>
+                  <button onClick={exportMarkdown}
+                    style={{ padding: "5px 10px", borderRadius: 5, border: `1px solid ${t.border}`, background: "transparent", color: t.textSec, fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)" }}>
+                    Copy Table
+                  </button>
+                  <button onClick={exportToM2}
+                    style={{
+                      padding: "5px 10px", borderRadius: 5,
+                      border: `1px solid ${exportCopied ? t.green : t.border}`,
+                      background: "transparent",
+                      color: exportCopied ? t.green : t.textSec, fontSize: 11, cursor: "pointer",
+                      fontFamily: "var(--mono)",
+                    }}>
+                    {exportCopied ? "\u2713 Synced to M2" : "\u21BB Sync to M2"}
+                  </button>
+                  <button onClick={handleQuestionCleanup} disabled={cleanupLoading || questions.length === 0}
+                    style={{
+                      padding: "5px 10px", borderRadius: 5,
+                      border: "1px solid rgba(251,191,36,0.3)",
+                      background: cleanupPreview ? "rgba(251,191,36,0.1)" : "transparent",
+                      color: "#fbbf24", fontSize: 11, cursor: "pointer", fontFamily: "var(--mono)",
+                      opacity: cleanupLoading || questions.length === 0 ? 0.5 : 1,
+                    }}>
+                    {cleanupLoading ? "Analyzing\u2026" : "\u2728 Cleanup"}
+                  </button>
+                </div>
               </div>
 
               {/* Cleanup Preview Panel */}
@@ -3843,29 +3922,47 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                 </div>
               )}
 
-              {/* Questions Table */}
+              {/* Questions Table — Redesigned: 6 columns */}
               <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
+
+                {/* Importance Score Legend */}
+                <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "10px 16px", borderBottom: `1px solid ${t.border}`, background: t.mode === "dark" ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.015)" }}>
+                  <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1, marginRight: 4 }}>Importance Score:</span>
+                  {[
+                    { color: IMPORTANCE_COLORS.stage, label: "Stage" },
+                    { color: IMPORTANCE_COLORS.intent, label: "Intent" },
+                    { color: IMPORTANCE_COLORS.volume, label: "Volume" },
+                    { color: IMPORTANCE_COLORS.fit, label: "Fit" },
+                  ].map(seg => (
+                    <span key={seg.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: seg.color, display: "inline-block" }} />
+                      <span style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)" }}>{seg.label}</span>
+                    </span>
+                  ))}
+                  <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", marginLeft: 8 }}>
+                    1-10 composite · hover for breakdown
+                  </span>
+                </div>
+
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr>
-                      <th style={thStyle(t)}></th>
-                      <th style={thStyle(t)}>#</th>
+                      <th style={{ ...thStyle(t), width: 36 }}></th>
+                      <th style={{ ...thStyle(t), width: 36 }}>#</th>
                       <th style={{ ...thStyle(t), textAlign: "left" }}>Question</th>
-                      <th style={thStyle(t)}>Persona</th>
-                      <th style={thStyle(t)}>Stage</th>
-                      <th style={thStyle(t)}>Lifecycle</th>
-                      <th style={thStyle(t)}>Source</th>
-                      <th style={thStyle(t)}>Jurisdiction</th>
-                      <th style={thStyle(t)}>Topic Cluster</th>
-                      <th style={thStyle(t)}>Intent</th>
-                      <th style={thStyle(t)}>Fit</th>
+                      <th style={{ ...thStyle(t), width: 70 }}>Persona</th>
+                      <th style={{ ...thStyle(t), width: 160, textAlign: "left" }}>Topic</th>
+                      <th style={{ ...thStyle(t), width: 60 }}>Score</th>
                     </tr>
                   </thead>
                   <tbody>
                     {displayQuestions.map((q, i) => {
                       const persona = PERSONAS.find(p => p.id === q.persona);
                       const stage = STAGES.find(s => s.id === q.stage);
+                      const lc = CLM_LIFECYCLE.find(l => l.id === (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack"));
                       const sel = selectedQs.has(q.id);
+                      const imp = computeImportance(q);
+                      const clusterMeta = CLUSTERS_META.find(c => c.name === q.cluster);
                       return (
                         <tr key={q.id} onClick={() => toggleQ(q.id)}
                           style={{
@@ -3874,7 +3971,8 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                             transition: "background 0.15s",
                             animation: q.source === "ai" ? "fadeUp 0.4s ease" : undefined,
                           }}>
-                          <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                          {/* Checkbox */}
+                          <td style={{ padding: "8px 10px", textAlign: "center", verticalAlign: "top", paddingTop: 12 }}>
                             <div style={{
                               width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${sel ? t.brand : t.border}`,
                               background: sel ? t.brand : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
@@ -3883,113 +3981,195 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                               {sel && "\u2713"}
                             </div>
                           </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center", color: t.textGhost, fontFamily: "var(--mono)", fontSize: 11 }}>
+
+                          {/* Row # */}
+                          <td style={{ padding: "8px 6px", textAlign: "center", color: t.textGhost, fontFamily: "var(--mono)", fontSize: 11, verticalAlign: "top", paddingTop: 12 }}>
                             {i + 1}
                           </td>
-                          <td style={{ padding: "10px 12px", color: t.text, fontWeight: 500, lineHeight: 1.5 }}>
-                            {q.query}
-                            {q.searchContext && q.source === "ai" && (
-                              <div style={{ fontSize: 11, color: t.textGhost, marginTop: 3, fontStyle: "italic" }}>
-                                {q.searchContext}
-                              </div>
-                            )}
-                            {q.targetPersona && (
-                              <div style={{ fontSize: 11, color: "#a78bfa", marginTop: 3 }}>
-                                Personalized for: {q.targetPersona}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            <span style={{
-                              display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 11,
-                              fontWeight: 700, fontFamily: "var(--mono)", background: t.mode === "dark" ? "rgba(103,232,249,0.1)" : "rgba(8,145,178,0.08)",
-                              color: t.client, letterSpacing: 0.5,
-                            }}>
-                              {persona?.short}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            <span style={{
-                              display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 11,
-                              fontWeight: 700, fontFamily: "var(--mono)", background: stage?.color + "18",
-                              color: stage?.color, letterSpacing: 0.5,
-                            }}>
-                              {stage?.label}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            {(() => {
-                              const lc = CLM_LIFECYCLE.find(l => l.id === (q.lifecycle || CLUSTER_LIFECYCLE_MAP[q.cluster] || "full-stack"));
-                              return lc ? (
-                                <span style={{
-                                  display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 11,
-                                  fontWeight: 700, fontFamily: "var(--mono)", background: lc.color + "18",
-                                  color: lc.color, letterSpacing: 0.5, whiteSpace: "nowrap",
-                                }}>
-                                  {lc.id === "pre-signature" ? "PRE" : lc.id === "post-signature" ? "POST" : "FULL"}
-                                </span>
-                              ) : null;
-                            })()}
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            {q.source === "ai" && <span style={badge("rgba(167,139,250,0.15)", "#a78bfa")}>AI</span>}
-                            {q.source === "persona-research" && <span style={badge("rgba(236,72,153,0.12)", "#ec4899")}>PERSONA</span>}
-                            {q.source === "kb" && <span style={badge("rgba(103,232,249,0.12)", "#67e8f9")}>KB</span>}
-                            {q.source === "static" && <span style={badge("rgba(255,255,255,0.05)", t.textGhost)}>SEED</span>}
-                            {q.classification === "micro" && <span style={badge("rgba(251,191,36,0.12)", "#fbbf24")}>MICRO</span>}
-                            {q.classification === "macro" && q.source !== "static" && <span style={badge("rgba(74,222,128,0.12)", "#4ade80")}>MACRO</span>}
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            <span style={{ fontSize: 11, color: q.jurisdiction && q.jurisdiction !== "Global" ? "#3b82f6" : t.textGhost, fontFamily: "var(--mono)" }}>
-                              {q.jurisdiction || "Global"}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>
-                              {q.cluster}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            {q.intentType ? (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "center" }}>
-                                <span style={badge(INTENT_CONFIG[q.intentType]?.bg, INTENT_CONFIG[q.intentType]?.color)}>
-                                  {INTENT_CONFIG[q.intentType]?.label}
-                                </span>
-                                {q.volumeTier && (
-                                  <span style={{ fontSize: 10, color: VOLUME_CONFIG[q.volumeTier]?.color, fontFamily: "var(--mono)" }}>
-                                    {VOLUME_CONFIG[q.volumeTier]?.label}
-                                  </span>
+
+                          {/* Question + Source badges + Stage dot inline */}
+                          <td style={{ padding: "8px 12px", verticalAlign: "top" }}>
+                            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                              {/* Stage color dot */}
+                              <span title={stage?.label} style={{
+                                width: 8, height: 8, borderRadius: "50%", background: stage?.color || t.textGhost,
+                                display: "inline-block", flexShrink: 0, marginTop: 5,
+                              }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ color: t.text, fontWeight: 500, lineHeight: 1.5, fontSize: 12 }}>
+                                  {q.query}
+                                </div>
+                                {/* Metadata row: source + jurisdiction + intent */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
+                                  {q.source === "ai" && <span style={badge("rgba(167,139,250,0.15)", "#a78bfa")}>AI</span>}
+                                  {q.source === "persona-research" && <span style={badge("rgba(236,72,153,0.12)", "#ec4899")}>PERSONA</span>}
+                                  {q.source === "kb" && <span style={badge("rgba(103,232,249,0.12)", "#67e8f9")}>KB</span>}
+                                  {q.source === "static" && <span style={badge("rgba(255,255,255,0.05)", t.textGhost)}>SEED</span>}
+                                  {q.classification === "micro" && <span style={badge("rgba(251,191,36,0.12)", "#fbbf24")}>MICRO</span>}
+                                  {q.classification === "macro" && q.source !== "static" && <span style={badge("rgba(74,222,128,0.12)", "#4ade80")}>MACRO</span>}
+                                  {q.intentType && (
+                                    <span style={{
+                                      ...badge(INTENT_CONFIG[q.intentType]?.bg, INTENT_CONFIG[q.intentType]?.color),
+                                      marginLeft: 0,
+                                    }}>
+                                      {INTENT_CONFIG[q.intentType]?.label}
+                                    </span>
+                                  )}
+                                  {q.volumeTier && (
+                                    <span style={{ fontSize: 10, color: VOLUME_CONFIG[q.volumeTier]?.color, fontFamily: "var(--mono)", fontWeight: 600 }}>
+                                      {VOLUME_CONFIG[q.volumeTier]?.label}
+                                    </span>
+                                  )}
+                                  {q.jurisdiction && q.jurisdiction !== "Global" && (
+                                    <span style={{ fontSize: 10, color: "#3b82f6", fontFamily: "var(--mono)", fontWeight: 600 }}>
+                                      {q.jurisdiction}
+                                    </span>
+                                  )}
+                                </div>
+                                {q.searchContext && q.source === "ai" && (
+                                  <div style={{ fontSize: 10, color: t.textGhost, marginTop: 3, fontStyle: "italic" }}>
+                                    {q.searchContext}
+                                  </div>
+                                )}
+                                {q.targetPersona && (
+                                  <div style={{ fontSize: 10, color: "#a78bfa", marginTop: 2 }}>
+                                    Personalized for: {q.targetPersona}
+                                  </div>
                                 )}
                               </div>
-                            ) : (
-                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
-                            )}
+                            </div>
                           </td>
-                          <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                            {q.personaFit != null ? (
-                              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+
+                          {/* Persona */}
+                          <td style={{ padding: "8px 6px", textAlign: "center", verticalAlign: "top", paddingTop: 10 }}>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                              <img src={persona?.avatar} alt="" style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${t.border}` }} />
+                              <span style={{
+                                fontSize: 10, fontWeight: 700, fontFamily: "var(--mono)",
+                                color: t.client, letterSpacing: 0.5,
+                              }}>
+                                {persona?.short}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Topic = Cluster + Lifecycle */}
+                          <td style={{ padding: "8px 8px", verticalAlign: "top", paddingTop: 10 }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                              <span style={{
+                                fontSize: 11, color: clusterMeta?.color || t.textDim, fontWeight: 600,
+                                fontFamily: "var(--mono)", lineHeight: 1.3,
+                              }}>
+                                {q.cluster}
+                              </span>
+                              {lc && (
                                 <span style={{
-                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)",
-                                  color: q.personaFit >= 8 ? "#4ade80" : q.personaFit >= 5 ? "#fbbf24" : "#f87171",
+                                  display: "inline-block", padding: "1px 5px", borderRadius: 3, fontSize: 9,
+                                  fontWeight: 700, fontFamily: "var(--mono)", background: lc.color + "15",
+                                  color: lc.color, letterSpacing: 0.3, alignSelf: "flex-start",
                                 }}>
-                                  {q.personaFit}
+                                  {lc.id === "pre-signature" ? "PRE-SIGN" : lc.id === "post-signature" ? "POST-SIGN" : "FULL-STACK"}
                                 </span>
-                                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>/10</span>
-                                {q.bestPersona && q.bestPersona !== q.persona && (
-                                  <span style={{ fontSize: 10, color: "#f87171", fontFamily: "var(--mono)" }} title={`Better fit: ${q.bestPersona}`}>
-                                    →{q.bestPersona.toUpperCase()}
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
-                            )}
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Importance Score Donut */}
+                          <td style={{ padding: "8px 6px", textAlign: "center", verticalAlign: "top", paddingTop: 8 }}
+                            onMouseEnter={e => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setHoveredScore({ qId: q.id, x: rect.left - 260, y: rect.top + rect.height / 2, imp, q, stage, persona });
+                            }}
+                            onMouseLeave={() => setHoveredScore(null)}>
+                            <MiniDonut
+                              score={imp.score}
+                              stage={imp.stage}
+                              intent={imp.intent}
+                              volume={imp.volume}
+                              fit={imp.fit}
+                              theme={t}
+                            />
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+
+                {/* Importance Score Hover Card */}
+                {hoveredScore && (() => {
+                  const { imp, q: hq, stage: hStage, persona: hPersona } = hoveredScore;
+                  const scoreColor = imp.score >= 8 ? "#4ade80" : imp.score >= 5 ? "#fbbf24" : "#f87171";
+                  const dims = [
+                    { label: "Stage", sublabel: hStage?.label || "—", value: imp.stage, max: 10, color: IMPORTANCE_COLORS.stage, weight: "35%" },
+                    { label: "Intent", sublabel: INTENT_CONFIG[hq.intentType]?.label || "Default", value: imp.intent, max: 10, color: IMPORTANCE_COLORS.intent, weight: "30%" },
+                    { label: "Volume", sublabel: VOLUME_CONFIG[hq.volumeTier]?.label || "Default", value: imp.volume, max: 10, color: IMPORTANCE_COLORS.volume, weight: "20%" },
+                    { label: "Fit", sublabel: hq.personaFit != null ? `${hq.personaFit}/10` : "Default", value: imp.fit, max: 10, color: IMPORTANCE_COLORS.fit, weight: "15%" },
+                  ];
+                  // Clamp vertical position
+                  const top = Math.max(60, Math.min(hoveredScore.y - 90, window.innerHeight - 280));
+                  return (
+                    <div style={{
+                      position: "fixed", left: hoveredScore.x, top,
+                      zIndex: 9999, pointerEvents: "none",
+                      background: t.mode === "dark" ? "rgba(15,15,30,0.96)" : "rgba(255,255,255,0.97)",
+                      border: `1px solid ${scoreColor}40`, borderRadius: 12,
+                      padding: "16px 20px", width: 250,
+                      boxShadow: `0 8px 32px rgba(0,0,0,0.45), 0 0 0 1px ${scoreColor}15`,
+                      backdropFilter: "blur(16px)", animation: "fadeUp 0.15s ease",
+                    }}>
+                      {/* Header: Score + Label */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                        <MiniDonut size={48} score={imp.score} stage={imp.stage} intent={imp.intent} volume={imp.volume} fit={imp.fit} theme={t} />
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                            Importance
+                          </div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: scoreColor, fontFamily: "var(--mono)", lineHeight: 1 }}>
+                            {imp.score}<span style={{ fontSize: 12, color: t.textGhost, fontWeight: 500 }}>/10</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Dimension Breakdown */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {dims.map(d => (
+                          <div key={d.label}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                <span style={{ width: 6, height: 6, borderRadius: "50%", background: d.color, display: "inline-block" }} />
+                                <span style={{ fontSize: 10, fontWeight: 700, color: t.text, fontFamily: "var(--mono)" }}>{d.label}</span>
+                                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>({d.weight})</span>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <span style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)" }}>{d.sublabel}</span>
+                                <span style={{ fontSize: 11, fontWeight: 800, color: d.color, fontFamily: "var(--mono)" }}>{d.value}</span>
+                              </div>
+                            </div>
+                            <div style={{ width: "100%", height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                              <div style={{ width: `${(d.value / d.max) * 100}%`, height: "100%", borderRadius: 2, background: d.color, transition: "width 0.3s ease" }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Footer: Persona + Stage context */}
+                      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <img src={hPersona?.avatar} alt="" style={{ width: 16, height: 16, borderRadius: "50%", objectFit: "cover" }} />
+                          <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>{hPersona?.short}</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: hStage?.color, display: "inline-block" }} />
+                          <span style={{ fontSize: 9, color: hStage?.color, fontFamily: "var(--mono)", fontWeight: 600 }}>{hStage?.label}</span>
+                        </div>
+                        {hq.jurisdiction && hq.jurisdiction !== "Global" && (
+                          <span style={{ fontSize: 9, color: "#3b82f6", fontFamily: "var(--mono)" }}>{hq.jurisdiction}</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Export Callout */}
