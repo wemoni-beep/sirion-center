@@ -2595,7 +2595,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
             }));
             // Force-relaxation packing: place all, then push apart iteratively
             const placed = [];
-            const pad = 6;
+            const pad = 8;
             // Initial placement: distribute across width with jitter
             const cols = Math.ceil(Math.sqrt(bubbles.length * (W / H)));
             const rows = Math.ceil(bubbles.length / cols);
@@ -2634,7 +2634,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
             const wrapText = (name, r) => {
               const short = name.replace(" / ", " / ").replace(" & ", " & ");
               const words = short.split(" ");
-              const fontSize = r >= 65 ? 12 : r >= 50 ? 11 : 10;
+              const fontSize = r >= 65 ? 10.5 : r >= 50 ? 9.5 : 8.5;
               const charW = fontSize * 0.5;
               const maxLineW = r * 1.7;
               const maxChars = Math.floor(maxLineW / charW);
@@ -2657,6 +2657,12 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                       </clipPath>
                     ))}
                   </defs>
+                  <style>{`
+                    @keyframes bripple { 0% { transform: scale(0.3); opacity: 0.6; } 100% { transform: scale(1.3); opacity: 0; } }
+                    .bubble-g .bubble-ring { transform-origin: center; transform-box: fill-box; }
+                    .bubble-g:hover .bubble-ring { animation: bripple 0.6s ease-out; }
+                    .bubble-g:hover .bubble-main { filter: brightness(1.15); transition: filter 0.15s; }
+                  `}</style>
                   {bubbles.map(b => {
                     const on = activeClusters.has(b.name);
                     const { lines, fontSize } = wrapText(b.name, b.r);
@@ -2671,19 +2677,21 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                     const textBlockH = lines.length * lineH;
                     const textStartY = b.cy - textBlockH / 2 + fontSize * 0.4;
                     return (
-                      <g key={b.name} onClick={() => toggleCluster(b.name)} style={{ cursor: "pointer" }}>
-                        <circle cx={b.cx} cy={b.cy} r={b.r} fill={fillColor} stroke={strokeColor}
+                      <g key={b.name} className="bubble-g" onClick={() => toggleCluster(b.name)} style={{ cursor: "pointer" }}>
+                        <circle cx={b.cx} cy={b.cy} r={b.r} className="bubble-main" fill={fillColor} stroke={strokeColor}
                           strokeWidth={on ? 2.5 : 1.5} opacity={on ? 1 : 0.7}
                           style={{ transition: "all 0.25s ease" }}>
                           <title>{`${b.name}${b.trend === "rising" ? "  RISING DEMAND" : ""}\n\n${b.desc}\n\nWhy it matters: ${b.why}\n\nImportance: ${b.weight}/100`}</title>
                         </circle>
+                        <circle className="bubble-ring" cx={b.cx} cy={b.cy} r={b.r}
+                          fill="none" stroke={baseColor} strokeWidth={2} opacity={0} />
                         {on && <circle cx={b.cx} cy={b.cy} r={b.r + 3} fill="none" stroke={baseColor + "25"}
                           strokeWidth={1} style={{ transition: "all 0.25s" }} />}
                         <g clipPath={`url(#${clipId})`} style={{ pointerEvents: "none" }}>
                           {lines.map((ln, i) => (
                             <text key={i} x={b.cx} y={textStartY + i * lineH}
                               textAnchor="middle" dominantBaseline="central"
-                              fill={textColor} fontSize={fontSize} fontWeight={700}
+                              fill={textColor} fontSize={fontSize} fontWeight={500}
                               fontFamily="var(--mono)" opacity={on ? 1 : 0.7}>
                               {ln}
                             </text>
@@ -2702,7 +2710,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                           </g>
                         )}
                         <text x={b.cx} y={b.cy + b.r * 0.55} textAnchor="middle" dominantBaseline="central"
-                          fill={on ? baseColor : baseColor + "50"} fontSize={8} fontWeight={600}
+                          fill={on ? baseColor : baseColor + "50"} fontSize={7.5} fontWeight={500}
                           fontFamily="var(--mono)" style={{ pointerEvents: "none" }}
                           clipPath={`url(#${clipId})`}>
                           {b.weight}
