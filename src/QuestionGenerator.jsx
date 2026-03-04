@@ -749,6 +749,7 @@ export default function QuestionGenerator({ onNavigate }) {
   const [industry, setIndustry] = useState("Contract Lifecycle Management");
   const [activePersonas, setActivePersonas] = useState(new Set(PERSONAS.map(p => p.id)));
   const [activeClusters, setActiveClusters] = useState(new Set(CLUSTERS));
+  const [hoveredBubble, setHoveredBubble] = useState(null);
   const [generated, setGenerated] = useState(false);
   const [filterStage, setFilterStage] = useState("all");
   const [filterPersona, setFilterPersona] = useState("all");
@@ -2630,26 +2631,34 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                 a.cy = Math.max(a.r + pad, Math.min(H - a.r - pad, a.cy));
               });
             }
-            // Word-wrap text to fit inside circle (use 1.7x radius as available text width)
+            // Word-wrap: try font size, if all words fit in 3 lines keep it, else shrink
             const wrapText = (name, r) => {
-              const short = name.replace(" / ", " / ").replace(" & ", " & ");
-              const words = short.split(" ");
-              const fontSize = r >= 65 ? 10.5 : r >= 50 ? 9.5 : 8.5;
-              const charW = fontSize * 0.5;
-              const maxLineW = r * 1.7;
-              const maxChars = Math.floor(maxLineW / charW);
-              const lines = [];
-              let cur = "";
-              words.forEach(w => {
-                if ((cur + " " + w).trim().length <= maxChars) cur = (cur + " " + w).trim();
-                else { if (cur) lines.push(cur); cur = w; }
-              });
-              if (cur) lines.push(cur);
-              return { lines: lines.slice(0, 3), fontSize };
+              const words = name.split(" ");
+              const tryWrap = (fs) => {
+                const charW = fs * 0.52;
+                const maxChars = Math.floor((r * 1.6) / charW);
+                const lines = [];
+                let cur = "";
+                words.forEach(w => {
+                  if ((cur + " " + w).trim().length <= maxChars) cur = (cur + " " + w).trim();
+                  else { if (cur) lines.push(cur); cur = w; }
+                });
+                if (cur) lines.push(cur);
+                return lines;
+              };
+              // Try preferred size first, shrink if >3 lines
+              const pref = r >= 65 ? 10 : r >= 50 ? 9 : 8;
+              let lines = tryWrap(pref);
+              let fontSize = pref;
+              if (lines.length > 3) { fontSize = pref - 1.5; lines = tryWrap(fontSize); }
+              if (lines.length > 3) { fontSize = pref - 2.5; lines = tryWrap(fontSize); }
+              return { lines: lines.slice(0, 4), fontSize };
             };
+            const hb = hoveredBubble ? bubbles.find(b => b.name === hoveredBubble) : null;
             return (
-              <div style={{ width: "100%", marginBottom: 20 }}>
-                <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+              <div style={{ width: "100%", marginBottom: 20, position: "relative" }}>
+                <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}
+                  onMouseLeave={() => setHoveredBubble(null)}>
                   <defs>
                     {bubbles.map(b => (
                       <clipPath key={`clip-${b.name}`} id={`bclip-${b.name.replace(/[^a-z0-9]/gi, "")}`}>
@@ -2658,10 +2667,10 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                     ))}
                   </defs>
                   <style>{`
-                    @keyframes bripple { 0% { transform: scale(0.3); opacity: 0.6; } 100% { transform: scale(1.3); opacity: 0; } }
+                    @keyframes bripple { 0% { transform: scale(0.8); opacity: 0.6; } 100% { transform: scale(1.4); opacity: 0; } }
                     .bubble-g .bubble-ring { transform-origin: center; transform-box: fill-box; }
                     .bubble-g:hover .bubble-ring { animation: bripple 0.6s ease-out; }
-                    .bubble-g:hover .bubble-main { filter: brightness(1.15); transition: filter 0.15s; }
+                    .bubble-g:hover .bubble-main { filter: brightness(1.2); transition: filter 0.15s; }
                   `}</style>
                   {bubbles.map(b => {
                     const on = activeClusters.has(b.name);
@@ -2673,20 +2682,19 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                       : (t.mode === "dark" ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)");
                     const strokeColor = on ? baseColor + "90" : (t.mode === "dark" ? baseColor + "30" : baseColor + "20");
                     const textColor = on ? (t.mode === "dark" ? "#fff" : "#1e1b4b") : t.textDim;
-                    const lineH = fontSize + 3;
+                    const lineH = fontSize + 2.5;
                     const textBlockH = lines.length * lineH;
-                    const textStartY = b.cy - textBlockH / 2 + fontSize * 0.4;
+                    const textStartY = b.cy - textBlockH / 2 + fontSize * 0.35;
                     return (
-                      <g key={b.name} className="bubble-g" onClick={() => toggleCluster(b.name)} style={{ cursor: "pointer" }}>
+                      <g key={b.name} className="bubble-g" onClick={() => toggleCluster(b.name)}
+                        onMouseEnter={() => setHoveredBubble(b.name)} style={{ cursor: "pointer" }}>
                         <circle cx={b.cx} cy={b.cy} r={b.r} className="bubble-main" fill={fillColor} stroke={strokeColor}
-                          strokeWidth={on ? 2.5 : 1.5} opacity={on ? 1 : 0.7}
-                          style={{ transition: "all 0.25s ease" }}>
-                          <title>{`${b.name}${b.trend === "rising" ? "  RISING DEMAND" : ""}\n\n${b.desc}\n\nWhy it matters: ${b.why}\n\nImportance: ${b.weight}/100`}</title>
-                        </circle>
+                          strokeWidth={on ? 1.5 : 0.8} opacity={on ? 1 : 0.7}
+                          style={{ transition: "all 0.25s ease" }} />
                         <circle className="bubble-ring" cx={b.cx} cy={b.cy} r={b.r}
-                          fill="none" stroke={baseColor} strokeWidth={2} opacity={0} />
-                        {on && <circle cx={b.cx} cy={b.cy} r={b.r + 3} fill="none" stroke={baseColor + "25"}
-                          strokeWidth={1} style={{ transition: "all 0.25s" }} />}
+                          fill="none" stroke={baseColor} strokeWidth={1} opacity={0} />
+                        {on && <circle cx={b.cx} cy={b.cy} r={b.r + 3} fill="none" stroke={baseColor + "20"}
+                          strokeWidth={0.5} style={{ transition: "all 0.25s" }} />}
                         <g clipPath={`url(#${clipId})`} style={{ pointerEvents: "none" }}>
                           {lines.map((ln, i) => (
                             <text key={i} x={b.cx} y={textStartY + i * lineH}
@@ -2709,8 +2717,8 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                             </text>
                           </g>
                         )}
-                        <text x={b.cx} y={b.cy + b.r * 0.55} textAnchor="middle" dominantBaseline="central"
-                          fill={on ? baseColor : baseColor + "50"} fontSize={7.5} fontWeight={500}
+                        <text x={b.cx} y={b.cy + b.r * 0.6} textAnchor="middle" dominantBaseline="central"
+                          fill={on ? baseColor : baseColor + "50"} fontSize={7} fontWeight={500}
                           fontFamily="var(--mono)" style={{ pointerEvents: "none" }}
                           clipPath={`url(#${clipId})`}>
                           {b.weight}
@@ -2719,6 +2727,44 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                     );
                   })}
                 </svg>
+                {/* Styled tooltip */}
+                {hb && (() => {
+                  const pctX = (hb.cx / W) * 100;
+                  const pctY = (hb.cy / H) * 100;
+                  const onRight = pctX < 55;
+                  return (
+                    <div style={{
+                      position: "absolute", top: `${pctY}%`,
+                      ...(onRight ? { left: `${pctX + 6}%` } : { right: `${100 - pctX + 6}%` }),
+                      transform: "translateY(-50%)", zIndex: 20, pointerEvents: "none",
+                      background: t.mode === "dark" ? "rgba(15,15,30,0.95)" : "rgba(255,255,255,0.97)",
+                      border: `1px solid ${hb.color}40`, borderRadius: 10,
+                      padding: "12px 16px", maxWidth: 260, minWidth: 180,
+                      boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px ${hb.color}15`,
+                      backdropFilter: "blur(12px)", animation: "fadeUp 0.15s ease",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: hb.color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: t.text, fontFamily: "var(--mono)" }}>{hb.name}</span>
+                        {hb.trend === "rising" && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: "#4ade80", fontFamily: "var(--mono)",
+                            background: "rgba(74,222,128,0.1)", padding: "1px 6px", borderRadius: 6 }}>RISING</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5, marginBottom: 8 }}>{hb.desc}</div>
+                      <div style={{ fontSize: 10, color: hb.color, lineHeight: 1.4, fontStyle: "italic" }}>{hb.why}</div>
+                      <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>IMPORTANCE</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ width: 48, height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                            <div style={{ width: `${hb.weight}%`, height: "100%", borderRadius: 2, background: hb.color }} />
+                          </div>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: hb.color, fontFamily: "var(--mono)" }}>{hb.weight}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
