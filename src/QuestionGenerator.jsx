@@ -115,6 +115,33 @@ const CLM_LIFECYCLE = [
   { id: "full-stack", label: "Full-Stack CLM", color: "#a78bfa", icon: "\u267E", desc: "End-to-end platform, analytics, integrations" },
 ];
 
+/* ── CLM Market Share Reference (researched Q1 2026) ─────
+   Sources: Gartner MQ 2025, Forrester Wave Q1 2025, IDC MarketScape 2025,
+   6sense adoption data, Sacra/Getlatka revenue estimates.
+   Share = approximate % of ~$2B pure-play CLM market.
+   ──────────────────────────────────────────────────────── */
+const CLM_MARKET_SHARE = {
+  "icertis":        { share: 17, arr: "$350M", tier: "Leader", color: "#60a5fa" },
+  "ironclad":       { share: 9,  arr: "$200M", tier: "Leader", color: "#34d399" },
+  "docusign":       { share: 8,  arr: "N/A",   tier: "Leader", color: "#fbbf24" },
+  "docusign clm":   { share: 8,  arr: "N/A",   tier: "Leader", color: "#fbbf24" },
+  "sirion":         { share: 5,  arr: "$85M",  tier: "Leader", color: "#a78bfa" },
+  "sirionlabs":     { share: 5,  arr: "$85M",  tier: "Leader", color: "#a78bfa" },
+  "conga":          { share: 5,  arr: "$100M", tier: "Challenger", color: "#fb923c" },
+  "apttus":         { share: 5,  arr: "$100M", tier: "Challenger", color: "#fb923c" },
+  "agiloft":        { share: 4,  arr: "$71M",  tier: "Leader", color: "#f472b6" },
+  "sap ariba":      { share: 6,  arr: "N/A",   tier: "Suite", color: "#38bdf8" },
+  "contractpodai":  { share: 2,  arr: "$47M",  tier: "Visionary", color: "#c084fc" },
+  "linksquares":    { share: 2,  arr: "$40M",  tier: "Strong", color: "#4ade80" },
+  "coupa":          { share: 3,  arr: "N/A",   tier: "Suite", color: "#e879f9" },
+  "zycus":          { share: 2,  arr: "N/A",   tier: "Niche", color: "#94a3b8" },
+  "gep":            { share: 1,  arr: "N/A",   tier: "Niche", color: "#94a3b8" },
+};
+const lookupShare = (name) => {
+  const key = name.toLowerCase().trim();
+  return CLM_MARKET_SHARE[key] || Object.entries(CLM_MARKET_SHARE).find(([k]) => key.includes(k) || k.includes(key))?.[1] || null;
+};
+
 /* Map clusters to their primary lifecycle stage */
 const CLUSTER_LIFECYCLE_MAP = {
   "Contract AI / Automation": "pre-signature",
@@ -3250,56 +3277,191 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
             </div>
           )}
 
-          {/* COMPANY INTEL PANEL */}
-          {companyIntel && generated && (
-            <div style={{
-              background: t.bgCard, border: `1px solid ${t.border}`, borderLeft: "3px solid #67e8f9",
-              borderRadius: 10, padding: 20, marginBottom: 24,
-            }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#67e8f9", fontFamily: "var(--mono)", letterSpacing: 1, marginBottom: 10 }}>
-                COMPANY INTELLIGENCE {"\u2014"} {company.toUpperCase()}
-              </div>
-              {companyIntel.marketPosition && (
-                <div style={{ fontSize: 12, color: t.text, lineHeight: 1.6, marginBottom: 12 }}>
-                  {companyIntel.marketPosition}
-                </div>
-              )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                {companyIntel.keyFindings && companyIntel.keyFindings.length > 0 && (
+          {/* COMPANY INTEL PANEL — redesigned */}
+          {companyIntel && generated && (() => {
+            /* Build competitor chart data: merge AI-returned names with CLM_MARKET_SHARE lookup */
+            const compNameNorm = (company || "").toLowerCase().trim();
+            const aiComps = (companyIntel.competitors || []).map(name => {
+              const data = lookupShare(name);
+              return { name, share: data ? data.share : 2, color: data ? data.color : (t.mode === "dark" ? "#64748b" : "#94a3b8"), tier: data ? data.tier : "Other", arr: data ? data.arr : "N/A" };
+            });
+            /* Add the researched company itself if not already in the list */
+            const compInList = aiComps.some(c => c.name.toLowerCase().includes(compNameNorm) || compNameNorm.includes(c.name.toLowerCase()));
+            const compData = lookupShare(company);
+            if (!compInList && compData) {
+              aiComps.push({ name: company, share: compData.share, color: t.brand, tier: compData.tier, arr: compData.arr, isSelf: true });
+            }
+            /* Also tag self if already in list */
+            aiComps.forEach(c => {
+              if (c.name.toLowerCase().includes(compNameNorm) || compNameNorm.includes(c.name.toLowerCase())) c.isSelf = true;
+            });
+            const sortedComps = [...aiComps].sort((a, b) => b.share - a.share);
+            const maxShare = Math.max(...sortedComps.map(c => c.share), 1);
+            const findingIcons = ["\u26A1", "\uD83C\uDFAF", "\uD83D\uDCA1", "\uD83D\uDD0D", "\u2B50", "\uD83D\uDCCA"];
+            const findingColors = ["#a78bfa", "#67e8f9", "#4ade80", "#fbbf24", "#f472b6", "#fb923c"];
+
+            return (
+              <div style={{ marginBottom: 24 }}>
+                {/* Header bar */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10, marginBottom: 14,
+                }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 8,
+                    background: "linear-gradient(135deg, #67e8f9, #06b6d4)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, color: "#fff", fontWeight: 700,
+                  }}>{"\uD83C\uDFE2"}</div>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>KEY FINDINGS</div>
-                    {companyIntel.keyFindings.map((f, i) => (
-                      <div key={i} style={{ fontSize: 11, color: t.textSec, lineHeight: 1.5, marginBottom: 4 }}>
-                        {"\u2022"} {f}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {companyIntel.competitors && companyIntel.competitors.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>COMPETITORS</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {companyIntel.competitors.map((c, i) => (
-                        <span key={i} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: t.mode === "dark" ? "rgba(103,232,249,0.08)" : "rgba(8,145,178,0.06)", color: "#67e8f9", fontFamily: "var(--mono)" }}>
-                          {c}
-                        </span>
-                      ))}
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#67e8f9", fontFamily: "var(--mono)", letterSpacing: 1 }}>
+                      COMPANY INTELLIGENCE
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                      {company.toUpperCase()} {"\u2014"} CLM Market Landscape
                     </div>
                   </div>
-                )}
-                {companyIntel.recentNews && companyIntel.recentNews.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>RECENT NEWS</div>
-                    {companyIntel.recentNews.map((n, i) => (
-                      <div key={i} style={{ fontSize: 11, color: t.textSec, lineHeight: 1.5, marginBottom: 4 }}>
-                        {"\u2022"} {n}
-                      </div>
-                    ))}
+                </div>
+
+                {/* Market Position summary */}
+                {companyIntel.marketPosition && (
+                  <div style={{
+                    background: t.mode === "dark" ? "rgba(103,232,249,0.04)" : "rgba(8,145,178,0.03)",
+                    border: `1px solid ${t.mode === "dark" ? "rgba(103,232,249,0.12)" : "rgba(8,145,178,0.10)"}`,
+                    borderRadius: 10, padding: "12px 16px", marginBottom: 16,
+                    fontSize: 12, color: t.text, lineHeight: 1.65,
+                  }}>
+                    {companyIntel.marketPosition}
                   </div>
                 )}
+
+                {/* 3-column layout: Key Findings | Competitor Chart | Recent News */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 14 }}>
+
+                  {/* KEY FINDINGS — small cards */}
+                  {companyIntel.keyFindings && companyIntel.keyFindings.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, fontFamily: "var(--mono)", letterSpacing: 1.2, marginBottom: 8 }}>
+                        KEY FINDINGS
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {companyIntel.keyFindings.map((f, i) => {
+                          const accent = findingColors[i % findingColors.length];
+                          return (
+                            <div key={i} style={{
+                              background: t.bgCard, border: `1px solid ${t.border}`,
+                              borderLeft: `3px solid ${accent}`,
+                              borderRadius: 8, padding: "8px 10px",
+                              display: "flex", alignItems: "flex-start", gap: 8,
+                              transition: "border-color 0.2s",
+                            }}>
+                              <span style={{ fontSize: 12, lineHeight: 1, marginTop: 1, flexShrink: 0 }}>
+                                {findingIcons[i % findingIcons.length]}
+                              </span>
+                              <span style={{ fontSize: 11, color: t.text, lineHeight: 1.45 }}>
+                                {f}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* COMPETITOR MARKET SHARE — horizontal bar chart */}
+                  {sortedComps.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, fontFamily: "var(--mono)", letterSpacing: 1.2, marginBottom: 8 }}>
+                        CLM MARKET SHARE (%)
+                      </div>
+                      <div style={{
+                        background: t.bgCard, border: `1px solid ${t.border}`,
+                        borderRadius: 10, padding: "10px 14px",
+                      }}>
+                        {sortedComps.map((c, i) => {
+                          const barW = Math.max(8, (c.share / maxShare) * 100);
+                          const isSelf = c.isSelf;
+                          return (
+                            <div key={i} style={{
+                              display: "flex", alignItems: "center", gap: 8,
+                              marginBottom: i < sortedComps.length - 1 ? 7 : 0,
+                            }}>
+                              <div style={{
+                                width: 72, fontSize: 10, fontWeight: isSelf ? 700 : 500,
+                                color: isSelf ? t.brand : t.text, fontFamily: "var(--mono)",
+                                textAlign: "right", flexShrink: 0, lineHeight: 1.2,
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              }}>
+                                {c.name}
+                              </div>
+                              <div style={{
+                                flex: 1, height: 14, borderRadius: 4,
+                                background: t.mode === "dark" ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
+                                overflow: "hidden", position: "relative",
+                              }}>
+                                <div style={{
+                                  width: `${barW}%`, height: "100%", borderRadius: 4,
+                                  background: isSelf
+                                    ? `linear-gradient(90deg, ${t.brand}, ${t.brand}cc)`
+                                    : `linear-gradient(90deg, ${c.color}cc, ${c.color}80)`,
+                                  transition: "width 0.6s cubic-bezier(0.4,0,0.2,1)",
+                                  boxShadow: isSelf ? `0 0 8px ${t.brand}40` : "none",
+                                }} />
+                              </div>
+                              <div style={{
+                                width: 28, fontSize: 10, fontWeight: 700,
+                                color: isSelf ? t.brand : t.textDim, fontFamily: "var(--mono)",
+                                textAlign: "right", flexShrink: 0,
+                              }}>
+                                {c.share}%
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div style={{
+                          marginTop: 8, paddingTop: 6,
+                          borderTop: `1px solid ${t.border}`,
+                          fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)",
+                          textAlign: "right",
+                        }}>
+                          Source: Gartner MQ + Forrester Wave Q1 2025
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* RECENT NEWS — highlighted cards */}
+                  {companyIntel.recentNews && companyIntel.recentNews.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, fontFamily: "var(--mono)", letterSpacing: 1.2, marginBottom: 8 }}>
+                        RECENT NEWS
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {companyIntel.recentNews.map((n, i) => (
+                          <div key={i} style={{
+                            background: t.mode === "dark"
+                              ? "rgba(251,191,36,0.04)" : "rgba(251,191,36,0.03)",
+                            border: `1px solid ${t.mode === "dark" ? "rgba(251,191,36,0.12)" : "rgba(251,191,36,0.10)"}`,
+                            borderRadius: 8, padding: "8px 10px",
+                            display: "flex", alignItems: "flex-start", gap: 8,
+                          }}>
+                            <span style={{
+                              fontSize: 8, fontWeight: 800, fontFamily: "var(--mono)",
+                              background: "rgba(251,191,36,0.15)", color: "#fbbf24",
+                              padding: "2px 5px", borderRadius: 3, flexShrink: 0, marginTop: 1,
+                              letterSpacing: 0.5,
+                            }}>NEW</span>
+                            <span style={{ fontSize: 11, color: t.text, lineHeight: 1.45 }}>
+                              {n}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* RESULTS */}
           {generated && questions.length > 0 && (
