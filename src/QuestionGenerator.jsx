@@ -3466,7 +3466,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
           {/* RESULTS */}
           {generated && questions.length > 0 && (
             <>
-              {/* Stage Distribution */}
+              {/* Question Coverage Map — Funnel + Persona Bars */}
               <div style={{ marginBottom: 28 }}>
                 <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: t.sectionNum, textTransform: "uppercase", letterSpacing: 2, fontFamily: "var(--mono)" }}>Distribution</span>
@@ -3480,66 +3480,212 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                   Question Coverage Map
                 </h2>
 
-                <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length}, 1fr)`, gap: 1, background: t.border, borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
-                  {STAGES.map(s => (
-                    <div key={s.id} style={{ background: t.bgCard, padding: 16, textAlign: "center" }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: s.color, fontFamily: "var(--mono)", lineHeight: 1 }}>
-                        {stageCount[s.id] || 0}
-                      </div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: t.textDim, marginTop: 6, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)" }}>
-                        {s.label}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {/* 2-column: Stage Funnel (left) | Persona Bars (right) */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 16, alignItems: "start" }}>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: t.border, borderRadius: 10, overflow: "hidden" }}>
-                  {PERSONAS.filter(p => activePersonas.has(p.id)).map(p => {
-                    const profilesWithQs = personaProfiles
-                      .filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0)
-                      .sort((a, b) => (profileQuestionCount[b.id] || 0) - (profileQuestionCount[a.id] || 0));
-                    const isActive = filterPersona === p.id;
+                  {/* ── STAGE FUNNEL ─────────────────────── */}
+                  {(() => {
+                    const totalQs = questions.length;
+                    const maxStageCount = Math.max(...STAGES.map(s => stageCount[s.id] || 0), 1);
                     return (
-                      <div key={p.id}
-                        onClick={() => setFilterPersona(isActive ? "all" : p.id)}
-                        style={{
-                          background: isActive ? t.brand + "10" : t.bgCard,
-                          padding: 12, textAlign: "center", cursor: "pointer",
-                          outline: isActive ? `1px solid ${t.brand}40` : "none",
-                          transition: "background 0.15s",
-                        }}>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: isActive ? t.brand : t.client, fontFamily: "var(--mono)" }}>
-                          {personaCount[p.id] || 0}
+                      <div style={{
+                        background: t.bgCard, border: `1px solid ${t.border}`,
+                        borderRadius: 12, padding: "16px 20px",
+                      }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, fontFamily: "var(--mono)", letterSpacing: 1.2, marginBottom: 4 }}>
+                          BUYER JOURNEY FUNNEL
                         </div>
-                        <div style={{ fontSize: 11, color: isActive ? t.brand : t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)" }}>
-                          {p.short}
+                        <div style={{ fontSize: 22, fontWeight: 800, color: t.text, fontFamily: "var(--mono)", marginBottom: 14 }}>
+                          {totalQs} <span style={{ fontSize: 11, fontWeight: 500, color: t.textDim }}>questions</span>
                         </div>
-                        {profilesWithQs.length > 0 && (
-                          <div style={{ marginTop: 5, borderTop: `1px solid ${t.border}`, paddingTop: 5 }}>
-                            {profilesWithQs.slice(0, 3).map(pp => (
-                              <div key={pp.id}
-                                onClick={e => { e.stopPropagation(); setFilterPersona(filterPersona === pp.id ? "all" : pp.id); }}
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                          {STAGES.map((s, idx) => {
+                            const count = stageCount[s.id] || 0;
+                            const pct = totalQs > 0 ? Math.round((count / totalQs) * 100) : 0;
+                            /* Funnel: widest bar = 100%, others proportional; minimum 30% */
+                            const barW = Math.max(30, (count / maxStageCount) * 100);
+                            const isHovered = filterStage === s.id;
+                            return (
+                              <div key={s.id}
+                                onClick={() => setFilterStage(filterStage === s.id ? "all" : s.id)}
                                 style={{
-                                  fontSize: 9, lineHeight: 1.7, cursor: "pointer",
-                                  color: filterPersona === pp.id ? t.brand : t.textGhost,
-                                  background: filterPersona === pp.id ? t.brand + "10" : "transparent",
-                                  borderRadius: 3, padding: "0 3px",
-                                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                                  fontFamily: "var(--mono)",
+                                  width: `${barW}%`, cursor: "pointer",
+                                  background: isHovered
+                                    ? `${s.color}25`
+                                    : (t.mode === "dark" ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
+                                  border: `1px solid ${isHovered ? s.color + "50" : t.border}`,
+                                  borderRadius: idx === 0 ? "8px 8px 4px 4px" : idx === STAGES.length - 1 ? "4px 4px 8px 8px" : 4,
+                                  padding: "7px 12px",
+                                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                                  transition: "all 0.2s ease",
                                 }}>
-                                {pp.name.split(" ")[0]} ({profileQuestionCount[pp.id]})
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <div style={{
+                                    width: 6, height: 6, borderRadius: "50%",
+                                    background: s.color, flexShrink: 0,
+                                    boxShadow: `0 0 6px ${s.color}60`,
+                                  }} />
+                                  <span style={{
+                                    fontSize: 10, fontWeight: 600, color: isHovered ? s.color : t.text,
+                                    fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 0.8,
+                                  }}>
+                                    {s.label}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                                  <span style={{ fontSize: 16, fontWeight: 800, color: s.color, fontFamily: "var(--mono)" }}>
+                                    {count}
+                                  </span>
+                                  <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                                    {pct}%
+                                  </span>
+                                </div>
                               </div>
-                            ))}
-                            {profilesWithQs.length > 3 && (
-                              <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                                +{profilesWithQs.length - 3} more
-                              </div>
-                            )}
-                          </div>
-                        )}
+                            );
+                          })}
+                        </div>
                       </div>
                     );
-                  })}
+                  })()}
+
+                  {/* ── PERSONA DISTRIBUTION BARS ────────── */}
+                  <div style={{
+                    background: t.bgCard, border: `1px solid ${t.border}`,
+                    borderRadius: 12, padding: "16px 20px",
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, fontFamily: "var(--mono)", letterSpacing: 1.2, marginBottom: 12 }}>
+                      PERSONA COVERAGE
+                    </div>
+                    {(() => {
+                      const activePs = PERSONAS.filter(p => activePersonas.has(p.id));
+                      const sortedByCount = [...activePs].sort((a, b) => (personaCount[b.id] || 0) - (personaCount[a.id] || 0));
+                      const maxPC = Math.max(...sortedByCount.map(p => personaCount[p.id] || 0), 1);
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {sortedByCount.map(p => {
+                            const count = personaCount[p.id] || 0;
+                            const barW = Math.max(6, (count / maxPC) * 100);
+                            const isActive = filterPersona === p.id;
+                            const profilesWithQs = personaProfiles
+                              .filter(pp => pp.personaType === p.id && (profileQuestionCount[pp.id] || 0) > 0)
+                              .sort((a, b) => (profileQuestionCount[b.id] || 0) - (profileQuestionCount[a.id] || 0));
+
+                            return (
+                              <div key={p.id}>
+                                {/* Main persona bar row */}
+                                <div
+                                  onClick={() => setFilterPersona(isActive ? "all" : p.id)}
+                                  style={{
+                                    display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+                                    padding: "4px 6px", borderRadius: 8,
+                                    background: isActive ? t.brand + "0a" : "transparent",
+                                    transition: "background 0.15s",
+                                  }}>
+                                  {/* Avatar */}
+                                  <div style={{
+                                    width: 28, height: 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
+                                    border: `2px solid ${isActive ? t.brand + "60" : t.border}`,
+                                    transition: "border-color 0.2s",
+                                  }}>
+                                    <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                  </div>
+                                  {/* Label */}
+                                  <div style={{
+                                    width: 56, fontSize: 10, fontWeight: 600, flexShrink: 0,
+                                    color: isActive ? t.brand : t.text, fontFamily: "var(--mono)",
+                                    lineHeight: 1.2,
+                                  }}>
+                                    {p.short}
+                                  </div>
+                                  {/* Bar */}
+                                  <div style={{
+                                    flex: 1, height: 16, borderRadius: 4,
+                                    background: t.mode === "dark" ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
+                                    overflow: "hidden",
+                                  }}>
+                                    <div style={{
+                                      width: `${barW}%`, height: "100%", borderRadius: 4,
+                                      background: isActive
+                                        ? `linear-gradient(90deg, ${t.brand}, ${t.brand}cc)`
+                                        : `linear-gradient(90deg, ${STAGES[1].color}80, ${STAGES[1].color}40)`,
+                                      transition: "width 0.5s cubic-bezier(0.4,0,0.2,1)",
+                                      boxShadow: isActive ? `0 0 8px ${t.brand}30` : "none",
+                                    }} />
+                                  </div>
+                                  {/* Count */}
+                                  <div style={{
+                                    width: 32, fontSize: 13, fontWeight: 800, textAlign: "right", flexShrink: 0,
+                                    color: isActive ? t.brand : t.text, fontFamily: "var(--mono)",
+                                  }}>
+                                    {count}
+                                  </div>
+                                </div>
+
+                                {/* Profile dots row — show individual contacts under this persona */}
+                                {profilesWithQs.length > 0 && (
+                                  <div style={{
+                                    marginLeft: 44, marginTop: 3, marginBottom: 2,
+                                    display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap",
+                                  }}>
+                                    {profilesWithQs.slice(0, 5).map(pp => {
+                                      const isProfileActive = filterPersona === pp.id;
+                                      const initial = (pp.name || "?")[0].toUpperCase();
+                                      return (
+                                        <div key={pp.id}
+                                          onClick={e => { e.stopPropagation(); setFilterPersona(isProfileActive ? "all" : pp.id); }}
+                                          title={`${pp.name} - ${pp.company || ""} (${profileQuestionCount[pp.id]} questions)`}
+                                          style={{
+                                            display: "flex", alignItems: "center", gap: 3,
+                                            padding: "1px 6px 1px 2px", borderRadius: 10,
+                                            background: isProfileActive ? t.brand + "18" : (t.mode === "dark" ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"),
+                                            border: `1px solid ${isProfileActive ? t.brand + "40" : t.border}`,
+                                            cursor: "pointer", transition: "all 0.15s",
+                                          }}>
+                                          <div style={{
+                                            width: 16, height: 16, borderRadius: "50%",
+                                            background: isProfileActive ? t.brand + "30" : (t.mode === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"),
+                                            display: "flex", alignItems: "center", justifyContent: "center",
+                                            fontSize: 8, fontWeight: 700,
+                                            color: isProfileActive ? t.brand : t.textDim,
+                                            fontFamily: "var(--mono)",
+                                          }}>
+                                            {initial}
+                                          </div>
+                                          <span style={{
+                                            fontSize: 9, fontWeight: 500,
+                                            color: isProfileActive ? t.brand : t.textGhost,
+                                            fontFamily: "var(--mono)", whiteSpace: "nowrap",
+                                          }}>
+                                            {pp.name.split(" ")[0]}
+                                            <span style={{ fontSize: 8, marginLeft: 2, opacity: 0.7 }}>
+                                              {profileQuestionCount[pp.id]}
+                                            </span>
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                    {profilesWithQs.length > 5 && (
+                                      <div
+                                        onClick={e => { e.stopPropagation(); setActiveTab("research"); }}
+                                        title={`View all ${profilesWithQs.length} ${p.short} profiles in Persona Research`}
+                                        style={{
+                                          fontSize: 9, color: t.brand, fontFamily: "var(--mono)",
+                                          cursor: "pointer", padding: "1px 6px", borderRadius: 10,
+                                          background: t.brand + "0a", border: `1px dashed ${t.brand}30`,
+                                          transition: "background 0.15s",
+                                        }}>
+                                        +{profilesWithQs.length - 5} more
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 
