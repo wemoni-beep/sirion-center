@@ -10,6 +10,7 @@ const PerceptionMonitor = lazy(() => import("./PerceptionMonitor"));
 const AuthorityRing = lazy(() => import("./AuthorityRing"));
 const BuyingStageGuide = lazy(() => import("./BuyingStageGuide"));
 const CLMAdvisor = lazy(() => import("./CLMAdvisor"));
+const StrategyAdvisor = lazy(() => import("./StrategyAdvisor"));
 
 
 /* ═══════════════════════════════════════════════════════
@@ -606,6 +607,7 @@ export default function App() {
   const [isDark, setIsDark] = useState(true);
   const [active, setActive] = useState("home");
   const [sbOpen, setSbOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const mob = useIsMobile();
   const t = isDark ? themes.dark : themes.light;
 
@@ -752,6 +754,22 @@ export default function App() {
               }}>{isDark ? "\u263D" : "\u2600"}</div>
             </button>
 
+            {/* AI Advisor toggle */}
+            <button onClick={() => setChatOpen(!chatOpen)}
+              style={{
+                background: chatOpen ? t.brand : "none",
+                border: `1px solid ${chatOpen ? t.brand : t.border}`,
+                borderRadius: 7, padding: "5px 12px",
+                color: chatOpen ? "#fff" : t.textDim,
+                cursor: "pointer", fontSize: 12, fontWeight: 600,
+                fontFamily: "var(--mono)", letterSpacing: 0.3,
+                display: "flex", alignItems: "center", gap: 6,
+                transition: "all 0.2s",
+              }}>
+              <span style={{ fontSize: 14 }}>AI</span>
+              <span>Advisor</span>
+            </button>
+
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 6 }}>
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: t.green, animation: "pulse 2s infinite" }} />
               <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Live</span>
@@ -770,6 +788,10 @@ export default function App() {
           </div>
         </div>
       </div>
+        {/* AI Strategy Advisor drawer */}
+        <Suspense fallback={null}>
+          <StrategyAdvisor open={chatOpen} onClose={() => setChatOpen(false)} />
+        </Suspense>
       </ThemeContext.Provider>
     </PipelineProvider>
   );

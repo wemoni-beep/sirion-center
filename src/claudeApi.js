@@ -86,3 +86,36 @@ export async function callClaude(systemPrompt, userMessage, timeoutMs = 120000) 
     throw e;
   }
 }
+
+/**
+ * Chat-style Claude call — returns raw text (no JSON parsing).
+ * Use for: Conversational AI advisor, strategy Q&A.
+ * Accepts multi-turn messages array [{role, content}].
+ */
+export async function callClaudeChat(systemPrompt, messages, maxTokens = 2048) {
+  const key = getAnthropicKey();
+  if (!key) throw new Error("Anthropic API key not configured. Enter it in Settings or add VITE_ANTHROPIC_API_KEY to .env");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: getAnthropicHeaders(),
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages,
+      }),
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "API Error");
+    return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") throw new Error("Request timed out — try again.");
+    throw e;
+  }
+}
