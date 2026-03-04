@@ -30,14 +30,46 @@ function cleanAIText(text) {
 }
 
 const PERSONAS = [
-  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC", influence: 85, desc: "Owns legal risk, contract policy, and regulatory compliance", avatar: "https://i.pravatar.cc/80?img=60" },
-  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO", influence: 65, desc: "Drives sourcing strategy, vendor management, and cost optimization", avatar: "https://i.pravatar.cc/80?img=68" },
-  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO", influence: 50, desc: "Leads enterprise IT strategy, digital transformation, and integrations", avatar: "https://i.pravatar.cc/80?img=52" },
-  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO", influence: 75, desc: "Streamlines legal workflows, technology adoption, and team efficiency", avatar: "https://i.pravatar.cc/80?img=47" },
-  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO", influence: 45, desc: "Evaluates technical architecture, APIs, security, and scalability", avatar: "https://i.pravatar.cc/80?img=11" },
-  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM", influence: 30, desc: "Handles day-to-day contract authoring, tracking, and obligations", avatar: "https://i.pravatar.cc/80?img=32" },
-  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD", influence: 38, desc: "Manages procurement operations, supplier relationships, and spend", avatar: "https://i.pravatar.cc/80?img=57" },
-  { id: "cfo", label: "CFO", icon: "\uD83D\uDCB0", short: "CFO", influence: 55, desc: "Oversees financial risk, contract value leakage, and ROI accountability", avatar: "https://i.pravatar.cc/80?img=13" },
+  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC", influence: 85,
+    desc: "Owns legal risk, contract policy, and regulatory compliance",
+    role: "Top legal officer in the organization. Signs off on contract policy, risk appetite, and vendor legal terms. Reports directly to the CEO.",
+    clmAngle: "63% of GCs rank CLM as their #1 legal tech priority. They control the legal risk framework that every contract must pass through.",
+    avatar: "https://i.pravatar.cc/80?img=60" },
+  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO", influence: 65,
+    desc: "Drives sourcing strategy, vendor management, and cost optimization",
+    role: "Leads enterprise procurement and supplier strategy. Owns the buy-side contract lifecycle from RFP to renewal. Controls spend across all vendors.",
+    clmAngle: "Per Sirion field intel, CPOs drive ~60% of CLM buying decisions. 80% of CPOs plan GenAI deployment in procurement by 2026.",
+    avatar: "https://i.pravatar.cc/80?img=68" },
+  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO", influence: 50,
+    desc: "Leads enterprise IT strategy, digital transformation, and integrations",
+    role: "Oversees all enterprise technology decisions. Evaluates CLM platforms for integration with ERP, CRM, and IT security compliance standards.",
+    clmAngle: "CIOs have veto power on any SaaS purchase. They evaluate SSO, API, SOC2 compliance, and integration with existing tech stack.",
+    avatar: "https://i.pravatar.cc/80?img=52" },
+  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO", influence: 75,
+    desc: "Streamlines legal workflows, technology adoption, and team efficiency",
+    role: "Vice President of Legal Operations. Bridges legal strategy and technology. Owns the legal tech stack selection, workflow design, and team productivity metrics.",
+    clmAngle: "The primary evaluator and champion for CLM tools. VPLOs run the buying committee, own the RFP process, and drive day-to-day adoption post-purchase.",
+    avatar: "https://i.pravatar.cc/80?img=47" },
+  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO", influence: 45,
+    desc: "Evaluates technical architecture, APIs, security, and scalability",
+    role: "Chief Technology Officer or VP of IT. Responsible for technical due diligence on all enterprise software. Assesses architecture, data security, and scalability.",
+    clmAngle: "Technical gatekeeper who can block a deal. Evaluates API quality, deployment model (cloud/hybrid), data residency, and enterprise-grade security.",
+    avatar: "https://i.pravatar.cc/80?img=11" },
+  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM", influence: 30,
+    desc: "Handles day-to-day contract authoring, tracking, and obligations",
+    role: "Manages the daily contract workflow -- drafting, redlining, approvals, obligation tracking. The hands-on power user of any CLM system.",
+    clmAngle: "End-user champion or blocker. CMs test-drive the product during POCs. Their feedback on usability directly influences the buying committee's final decision.",
+    avatar: "https://i.pravatar.cc/80?img=32" },
+  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD", influence: 38,
+    desc: "Manages procurement operations, supplier relationships, and spend",
+    role: "Director-level procurement leader. Manages supplier onboarding, contract negotiations, and procurement compliance. Reports to the CPO.",
+    clmAngle: "Operational buyer who needs CLM for supplier risk management and spend visibility. Often the project lead for CLM implementation on the procurement side.",
+    avatar: "https://i.pravatar.cc/80?img=57" },
+  { id: "cfo", label: "Chief Financial Officer", icon: "\uD83D\uDCB0", short: "CFO", influence: 55,
+    desc: "Oversees financial risk, contract value leakage, and ROI accountability",
+    role: "Top financial officer. Approves major software investments. Focused on contract value leakage, revenue recognition, and total cost of ownership.",
+    clmAngle: "79% of enterprise CLM purchases over $200K require CFO sign-off. They care about ROI proof, TCO, and revenue/cost impact of poor contract management.",
+    avatar: "https://i.pravatar.cc/80?img=13" },
 ];
 
 const STAGES = [
@@ -2655,67 +2687,118 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
         <>
           {/* Personas — Influence Funnel */}
           <label style={{ ...label, marginBottom: 10 }}>Target Personas ({activePersonas.size} selected)</label>
-          <div style={{
-            display: "flex", alignItems: "flex-end", gap: 0, marginBottom: 20,
-            padding: "18px 10px 0", borderRadius: 12,
-            background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
-            border: `1px solid ${t.border}`,
-            overflow: "hidden",
-          }}>
-            {sortedPersonas.map((p, i) => {
-              const on = activePersonas.has(p.id);
-              const hov = hoveredPersonaBar === p.id;
-              const maxH = 130;
-              const barH = Math.max(24, (p.influence / 100) * maxH);
-              const barColor = on
-                ? (t.mode === "dark" ? "rgba(167,139,250,0.55)" : "rgba(124,58,237,0.35)")
-                : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)");
-              const barBorder = on ? t.brand + "50" : t.border;
+          <div style={{ position: "relative", marginBottom: 20 }}>
+            <div style={{
+              display: "flex", alignItems: "flex-end", gap: 0,
+              padding: "18px 10px 0", borderRadius: 12,
+              background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
+              border: `1px solid ${t.border}`,
+              overflow: "hidden",
+            }}>
+              {sortedPersonas.map((p, i) => {
+                const on = activePersonas.has(p.id);
+                const hov = hoveredPersonaBar === p.id;
+                const maxH = 130;
+                const barH = Math.max(24, (p.influence / 100) * maxH);
+                const barColor = on
+                  ? (t.mode === "dark" ? "rgba(167,139,250,0.55)" : "rgba(124,58,237,0.35)")
+                  : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)");
+                const barBorder = on ? t.brand + "50" : t.border;
+                return (
+                  <button key={p.id} onClick={() => togglePersona(p.id)}
+                    onMouseEnter={() => setHoveredPersonaBar(p.id)}
+                    onMouseLeave={() => setHoveredPersonaBar(null)}
+                    style={{
+                      flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                      background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                      transition: "transform 0.2s", transform: hov ? "translateY(-3px)" : "none",
+                    }}>
+                    {/* Percentage */}
+                    <div style={{
+                      fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
+                      color: on ? t.text : t.textGhost, marginBottom: 6,
+                      opacity: hov ? 1 : 0.8, transition: "opacity 0.2s",
+                    }}>{p.influence}%</div>
+                    {/* Bar */}
+                    <div style={{
+                      width: "70%", height: barH, borderRadius: "6px 6px 0 0",
+                      background: hov && on
+                        ? (t.mode === "dark" ? "rgba(167,139,250,0.7)" : "rgba(124,58,237,0.45)")
+                        : barColor,
+                      borderTop: `1px solid ${barBorder}`, borderLeft: `1px solid ${barBorder}`, borderRight: `1px solid ${barBorder}`, borderBottom: "none",
+                      transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
+                      boxShadow: hov && on ? `0 0 12px ${t.brand}30` : "none",
+                    }} />
+                    {/* Avatar */}
+                    <div style={{
+                      width: 34, height: 34, borderRadius: "50%", overflow: "hidden",
+                      border: `2px solid ${on ? t.brand + "60" : t.border}`,
+                      margin: "8px 0 4px",
+                      filter: on ? "none" : "grayscale(0.5) opacity(0.6)",
+                      transition: "all 0.25s",
+                      transform: hov ? "scale(1.12)" : "scale(1)",
+                    }}>
+                      <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                    {/* Label */}
+                    <div style={{
+                      fontSize: 9, fontWeight: 600, color: on ? t.text : t.textGhost,
+                      lineHeight: 1.2, textAlign: "center", marginBottom: 10,
+                      maxWidth: 72, fontFamily: "var(--mono)",
+                    }}>{p.label.length > 14 ? p.short : p.label}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Persona hover tooltip — same design as bubble chart */}
+            {hoveredPersonaBar && (() => {
+              const hp = PERSONAS.find(p => p.id === hoveredPersonaBar);
+              if (!hp) return null;
+              const idx = sortedPersonas.findIndex(p => p.id === hp.id);
+              const n = sortedPersonas.length;
+              // Position tooltip above chart, horizontally near the bar
+              const barPct = ((idx + 0.5) / n) * 100;
+              // Clamp so tooltip stays inside container
+              const leftPct = Math.max(5, Math.min(barPct - 18, 60));
+              const accentColor = t.brand;
               return (
-                <button key={p.id} onClick={() => togglePersona(p.id)} title={p.desc}
-                  onMouseEnter={() => setHoveredPersonaBar(p.id)}
-                  onMouseLeave={() => setHoveredPersonaBar(null)}
-                  style={{
-                    flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
-                    background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                    transition: "transform 0.2s", transform: hov ? "translateY(-3px)" : "none",
-                  }}>
-                  {/* Percentage */}
-                  <div style={{
-                    fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
-                    color: on ? t.text : t.textGhost, marginBottom: 6,
-                    opacity: hov ? 1 : 0.8, transition: "opacity 0.2s",
-                  }}>{p.influence}%</div>
-                  {/* Bar */}
-                  <div style={{
-                    width: "70%", height: barH, borderRadius: "6px 6px 0 0",
-                    background: hov && on
-                      ? (t.mode === "dark" ? "rgba(167,139,250,0.7)" : "rgba(124,58,237,0.45)")
-                      : barColor,
-                    borderTop: `1px solid ${barBorder}`, borderLeft: `1px solid ${barBorder}`, borderRight: `1px solid ${barBorder}`, borderBottom: "none",
-                    transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
-                    boxShadow: hov && on ? `0 0 12px ${t.brand}30` : "none",
-                  }} />
-                  {/* Avatar */}
-                  <div style={{
-                    width: 34, height: 34, borderRadius: "50%", overflow: "hidden",
-                    border: `2px solid ${on ? t.brand + "60" : t.border}`,
-                    margin: "8px 0 4px",
-                    filter: on ? "none" : "grayscale(0.5) opacity(0.6)",
-                    transition: "all 0.25s",
-                    transform: hov ? "scale(1.12)" : "scale(1)",
-                  }}>
-                    <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 8px)", left: `${leftPct}%`,
+                  zIndex: 30, pointerEvents: "none",
+                  background: t.mode === "dark" ? "rgba(15,15,30,0.95)" : "rgba(255,255,255,0.97)",
+                  border: `1px solid ${accentColor}40`, borderRadius: 10,
+                  padding: "14px 18px", width: 300,
+                  boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px ${accentColor}15`,
+                  backdropFilter: "blur(12px)", animation: "fadeUp 0.15s ease",
+                }}>
+                  {/* Header: avatar + name + short */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <img src={hp.avatar} alt={hp.short} style={{
+                      width: 36, height: 36, borderRadius: "50%", objectFit: "cover",
+                      border: `2px solid ${accentColor}60`,
+                    }} />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{hp.label}</div>
+                      <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>{hp.short}</div>
+                    </div>
                   </div>
-                  {/* Label */}
-                  <div style={{
-                    fontSize: 9, fontWeight: 600, color: on ? t.text : t.textGhost,
-                    lineHeight: 1.2, textAlign: "center", marginBottom: 10,
-                    maxWidth: 72, fontFamily: "var(--mono)",
-                  }}>{p.label.length > 14 ? p.short : p.label}</div>
-                </button>
+                  {/* Role description */}
+                  <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5, marginBottom: 8 }}>{hp.role}</div>
+                  {/* CLM angle */}
+                  <div style={{ fontSize: 10, color: accentColor, lineHeight: 1.4, fontStyle: "italic" }}>{hp.clmAngle}</div>
+                  {/* Influence bar */}
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>DECISION INFLUENCE</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 48, height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                        <div style={{ width: `${hp.influence}%`, height: "100%", borderRadius: 2, background: accentColor }} />
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: accentColor, fontFamily: "var(--mono)" }}>{hp.influence}%</span>
+                    </div>
+                  </div>
+                </div>
               );
-            })}
+            })()}
           </div>
 
           {/* Topic Clusters — Bubble Chart */}
