@@ -2692,7 +2692,7 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                     background: hov && on
                       ? (t.mode === "dark" ? "rgba(167,139,250,0.7)" : "rgba(124,58,237,0.45)")
                       : barColor,
-                    border: `1px solid ${barBorder}`, borderBottom: "none",
+                    borderTop: `1px solid ${barBorder}`, borderLeft: `1px solid ${barBorder}`, borderRight: `1px solid ${barBorder}`, borderBottom: "none",
                     transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
                     boxShadow: hov && on ? `0 0 12px ${t.brand}30` : "none",
                   }} />
