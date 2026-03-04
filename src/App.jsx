@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, Component, lazy, Suspense } from "react";
 import { themes, ThemeContext } from "./ThemeContext";
 import { PipelineProvider, usePipeline } from "./PipelineContext";
 import { GOOGLE_FONTS_URL } from "./typography";
-import { PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, RadialBarChart, RadialBar, Treemap } from "recharts";
 
 // BUG-009 fix: lazy-load heavy module components for code splitting
 const QuestionGenerator = lazy(() => import("./QuestionGenerator"));
@@ -33,6 +33,69 @@ const useIsMobile = () => {
   const [m, setM] = useState(false);
   useEffect(() => { const c = () => setM(window.innerWidth < 900); c(); window.addEventListener("resize", c); return () => window.removeEventListener("resize", c); }, []);
   return m;
+};
+
+/* ── Dashboard Visualization Helpers ── */
+const GaugeArc = ({ value, max = 100, size = 80, strokeWidth = 7, label, sub, color, t }) => {
+  const pct = Math.min(Math.max((value || 0) / max, 0), 1);
+  const r = (size - strokeWidth) / 2;
+  const circ = Math.PI * r;
+  const offset = circ * (1 - pct);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <svg width={size} height={size / 2 + 8} viewBox={`0 0 ${size} ${size / 2 + 8}`}>
+        <path d={`M ${strokeWidth / 2} ${size / 2} A ${r} ${r} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none" stroke={t.border} strokeWidth={strokeWidth} strokeLinecap="round" />
+        <path d={`M ${strokeWidth / 2} ${size / 2} A ${r} ${r} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={offset}
+          style={{ transition: "stroke-dashoffset 0.8s ease, stroke 0.3s" }} />
+      </svg>
+      <div style={{ marginTop: -4, textAlign: "center" }}>
+        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "var(--mono)", color, lineHeight: 1 }}>{label}</div>
+        <div style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", marginTop: 3 }}>{sub}</div>
+      </div>
+    </div>
+  );
+};
+
+const PersonaRing = ({ name, researched, t }) => {
+  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const r = 18, sw = 3, circ = 2 * Math.PI * r;
+  const color = researched ? "#22c55e" : "#f59e0b";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+      <div style={{ position: "relative", width: 44, height: 44 }}>
+        <svg width={44} height={44} viewBox="0 0 44 44">
+          <circle cx={22} cy={22} r={r} fill="none" stroke={t.border} strokeWidth={sw} />
+          <circle cx={22} cy={22} r={r} fill="none" stroke={color} strokeWidth={sw}
+            strokeDasharray={researched ? `${circ}` : `${4} ${4}`} strokeLinecap="round"
+            transform="rotate(-90 22 22)" style={{ transition: "stroke-dasharray 0.5s" }} />
+        </svg>
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+          fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color }}>{initials}</div>
+      </div>
+      <div style={{ fontSize: 10, color: t.textSec, textAlign: "center", maxWidth: 68, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {name.split(" ")[0]}
+      </div>
+    </div>
+  );
+};
+
+const CustomTreemapCell = (props) => {
+  const { x, y, width, height, name, fill, da, root } = props;
+  if (width < 4 || height < 4) return null;
+  const t = root?._t || {};
+  return (
+    <g>
+      <rect x={x + 1} y={y + 1} width={width - 2} height={height - 2} rx={3} ry={3}
+        fill={fill} fillOpacity={0.8} stroke={t.bgCard || "#111114"} strokeWidth={2} />
+      {width > 44 && height > 22 && <text x={x + width / 2} y={y + height / 2 - (height > 36 ? 3 : 0)} textAnchor="middle" dominantBaseline="central"
+        fill="#fff" fontSize={9} fontWeight={700} fontFamily="var(--mono)">{name}</text>}
+      {width > 44 && height > 36 && <text x={x + width / 2} y={y + height / 2 + 11} textAnchor="middle"
+        fill="rgba(255,255,255,0.65)" fontSize={8} fontFamily="var(--mono)">DA {da}</text>}
+    </g>
+  );
 };
 
 /* ── Dashboard — Sirion Growth Intelligence ── */
@@ -86,6 +149,13 @@ function Dashboard({ t, onNavigate }) {
     });
   }, [scanResultsArr.length, scanLlms.length]);
 
+  // Radial data for LLM chart
+  const llmRadialData = useMemo(() => {
+    if (!llmData.length) return [];
+    const fills = { Claude: "#67e8f9", Gemini: "#818cf8", ChatGPT: "#4ade80" };
+    return llmData.map((d, i) => ({ ...d, fill: fills[d.name] || ["#67e8f9", "#818cf8", "#4ade80"][i] }));
+  }, [llmData]);
+
   // CLM lifecycle breakdown
   const clmCounts = { "pre-signature": 0, "post-signature": 0, "full-stack": 0 };
   scanResultsArr.forEach(r => { const lc = r.lifecycle || "full-stack"; if (clmCounts[lc] !== undefined) clmCounts[lc]++; });
@@ -132,6 +202,30 @@ function Dashboard({ t, onNavigate }) {
     return Object.values(agg).sort((a, b) => b.mentions - a.mentions).slice(0, 8);
   }, [ps?.m2?.competitorSummary, ps?.m2?.exportPayload]);
 
+  // Competitor bar chart data (reversed for vertical layout - highest on top)
+  const competitorChartData = useMemo(() => {
+    return competitorData.slice(0, 8).map(c => ({
+      name: c.name.length > 12 ? c.name.slice(0, 11) + "\u2026" : c.name,
+      fullName: c.name, mentions: c.mentions,
+      isSirion: c.name.toLowerCase().includes("sirion"),
+    })).reverse();
+  }, [competitorData]);
+
+  // CLM donut data
+  const clmDonutData = useMemo(() => clmData.filter(d => d.count > 0), [clmData]);
+
+  // Authority treemap data
+  const treemapData = useMemo(() => {
+    if (!m3DomainsArr.length) return [];
+    const sc = { verified_zero: "#ef4444", verified_present: "#fbbf24", verified_strong: "#22c55e" };
+    return m3DomainsArr.map(d => ({
+      name: d.domain.replace(/\.(com|org|net|io|co)$/, ""),
+      fullDomain: d.domain, size: d.da || 50, da: d.da,
+      status: d.sirionStatus, fill: sc[d.sirionStatus] || "#ef4444",
+      priority: d.priority, _t: t,
+    }));
+  }, [m3DomainsArr.length, t]);
+
   // Prioritized actions
   const actions = [];
   if (!m1.hasData) actions.push({ priority: 1, text: "Generate buyer-intent questions to fuel the entire growth engine", mod: "M1", action: "m1", icon: "1" });
@@ -159,56 +253,22 @@ function Dashboard({ t, onNavigate }) {
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
 
-      {/* ── ROW 1: SCORE CARDS ── */}
+      {/* ── ROW 1: SCORE CARDS WITH GAUGE ARCS ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
         {[
-          {
-            label: "AI Visibility",
-            value: scanScores ? overallScore : "--",
-            unit: "/ 100",
-            color: scanScores ? scoreColor(overallScore, 30, 60) : t.textGhost,
-            sub: scannedAt ? `Scanned ${fmtTime(scannedAt)}` : "No scan yet",
-            action: "m2",
-          },
-          {
-            label: "Mention Rate",
-            value: scanScores ? `${mentionRate}%` : "--",
-            unit: "",
-            color: scanScores ? scoreColor(mentionRate, 30, 60) : t.textGhost,
-            sub: scanLlms.length ? `across ${scanLlms.length} LLMs` : "Run M2 scan",
-            action: "m2",
-          },
-          {
-            label: "Authority Gaps",
-            value: gapCount || "--",
-            unit: gapCount ? "domains" : "",
-            color: gapCount > 15 ? "#ef4444" : gapCount > 8 ? "#f59e0b" : gapCount > 0 ? "#22c55e" : t.textGhost,
-            sub: gapCount ? "zero Sirion presence" : "Run M3 analysis",
-            action: "m3",
-          },
-          {
-            label: "Share of Voice",
-            value: scanScores ? `${shareOfVoice}%` : "--",
-            unit: "",
-            color: scanScores ? scoreColor(shareOfVoice, 15, 30) : t.textGhost,
-            sub: competitorData.length ? `vs ${competitorData.length} vendors` : "vs competitors",
-            action: "m2",
-          },
+          { label: "AI Visibility", value: overallScore, max: 100, displayLabel: scanScores ? String(overallScore) : "--", color: scanScores ? scoreColor(overallScore, 30, 60) : t.textGhost, sub: scannedAt ? `Scanned ${fmtTime(scannedAt)}` : "No scan yet", action: "m2" },
+          { label: "Mention Rate", value: mentionRate, max: 100, displayLabel: scanScores ? `${mentionRate}%` : "--", color: scanScores ? scoreColor(mentionRate, 30, 60) : t.textGhost, sub: scanLlms.length ? `across ${scanLlms.length} LLMs` : "Run M2 scan", action: "m2" },
+          { label: "Authority Gaps", value: gapCount, max: totalDomains || 20, displayLabel: gapCount ? String(gapCount) : "--", color: gapCount > 15 ? "#ef4444" : gapCount > 8 ? "#f59e0b" : gapCount > 0 ? "#22c55e" : t.textGhost, sub: gapCount ? "zero Sirion presence" : "Run M3 analysis", action: "m3" },
+          { label: "Share of Voice", value: shareOfVoice, max: 100, displayLabel: scanScores ? `${shareOfVoice}%` : "--", color: scanScores ? scoreColor(shareOfVoice, 15, 30) : t.textGhost, sub: competitorData.length ? `vs ${competitorData.length} vendors` : "vs competitors", action: "m2" },
         ].map((s, i) => (
           <div key={i} onClick={() => onNavigate(s.action)} style={{
-            ...card({ padding: "16px 18px", cursor: "pointer", borderLeft: `3px solid ${s.color}` }),
-            transition: "all 0.2s",
+            ...card({ padding: "14px 12px", cursor: "pointer" }), transition: "all 0.2s",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
           }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: t.textDim, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
               {s.label}
             </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-              <span style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--mono)", color: s.color, lineHeight: 1 }}>
-                {s.value}
-              </span>
-              {s.unit && <span style={{ fontSize: 11, color: t.textDim, fontFamily: "var(--mono)" }}>{s.unit}</span>}
-            </div>
-            <div style={{ fontSize: 10, color: t.textSec, marginTop: 6, fontFamily: "var(--mono)" }}>{s.sub}</div>
+            <GaugeArc value={s.value} max={s.max} size={76} label={s.displayLabel} sub={s.sub} color={s.color} t={t} />
           </div>
         ))}
       </div>
@@ -274,125 +334,145 @@ function Dashboard({ t, onNavigate }) {
 
       {/* ── ROW 3: LLM BREAKDOWN + COMPETITOR LEADERBOARD ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        {/* Left: LLM Breakdown */}
+        {/* Left: LLM Radial Bar Chart */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: t.client, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.client, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
             AI Visibility by LLM
           </div>
-          {llmData.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {llmData.map(d => (
-                <div key={d.id}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{d.name}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: scoreColor(d.rate, 30, 60) }}>{d.rate}%</span>
+          {llmRadialData.length > 0 ? (
+            <div>
+              <ResponsiveContainer width="100%" height={170}>
+                <RadialBarChart cx="50%" cy="50%" innerRadius="30%" outerRadius="90%"
+                  data={llmRadialData} startAngle={180} endAngle={0} barSize={14}>
+                  <RadialBar dataKey="rate" background={{ fill: t.border }} cornerRadius={7} />
+                  <Tooltip content={({ payload }) => {
+                    if (!payload?.length) return null;
+                    const d = payload[0].payload;
+                    return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
+                      <div style={{ fontWeight: 700, color: t.text }}>{d.name}</div>
+                      <div style={{ color: t.textDim }}>{d.rate}% mentioned ({d.mentioned}/{d.total})</div>
+                    </div>);
+                  }} />
+                </RadialBarChart>
+              </ResponsiveContainer>
+              <div style={{ display: "flex", justifyContent: "center", gap: 16, marginTop: 4 }}>
+                {llmRadialData.map(d => (
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.fill }} />
+                    <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textSec }}>{d.name} {d.rate}%</span>
                   </div>
-                  <div style={{ height: 8, background: t.border, borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ width: `${d.rate}%`, height: "100%", background: scoreColor(d.rate, 30, 60), borderRadius: 4, transition: "width 0.5s ease" }} />
-                  </div>
-                  <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", marginTop: 2 }}>
-                    mentioned in {d.mentioned}/{d.total} queries
-                  </div>
-                </div>
-              ))}
-              <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", borderTop: `1px solid ${t.border}`, paddingTop: 8 }}>
-                {totalQueries} queries across {scanLlms.length} LLMs
+                ))}
               </div>
             </div>
           ) : emptyState("Run M2 scan to see LLM data", "m2", t.client)}
         </div>
 
-        {/* Right: Competitor Leaderboard */}
+        {/* Right: Competitor Bar Chart */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
             Competitor Leaderboard
           </div>
-          {competitorData.length > 0 ? (
-            <div>
-              <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 60px 50px", gap: 4, padding: "0 0 6px", borderBottom: `1px solid ${t.border}` }}>
-                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>#</span>
-                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)" }}>VENDOR</span>
-                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", textAlign: "right" }}>MENTIONS</span>
-                <span style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", textAlign: "right" }}>TOP 3</span>
-              </div>
-              {competitorData.slice(0, 6).map((c, i) => {
-                const isSirion = c.name.toLowerCase().includes("sirion");
-                return (
-                  <div key={i} style={{
-                    display: "grid", gridTemplateColumns: "24px 1fr 60px 50px", gap: 4,
-                    padding: "7px 4px", borderBottom: `1px solid ${t.border}22`,
-                    background: isSirion ? t.brand + "10" : "transparent",
-                    borderRadius: isSirion ? 4 : 0, marginTop: 2,
-                  }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", color: t.textDim }}>{i + 1}</span>
-                    <span style={{ fontSize: 12, fontWeight: isSirion ? 700 : 500, color: isSirion ? t.brand : t.text }}>
-                      {c.name}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: t.text, textAlign: "right" }}>{c.mentions}</span>
-                    <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: t.textSec, textAlign: "right" }}>{c.top3}</span>
-                  </div>
-                );
-              })}
-            </div>
+          {competitorChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={Math.max(170, competitorChartData.length * 26 + 20)}>
+              <BarChart data={competitorChartData} layout="vertical" barSize={7} margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={t.border} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 9, fill: t.textDim, fontFamily: "var(--mono)" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="name" width={88} tick={{ fontSize: 10, fill: t.textSec, fontFamily: "var(--mono)" }} axisLine={false} tickLine={false} />
+                <Tooltip content={({ payload }) => {
+                  if (!payload?.length) return null;
+                  const d = payload[0].payload;
+                  return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
+                    <div style={{ fontWeight: 700, color: t.text }}>{d.fullName}</div>
+                    <div style={{ color: t.textDim }}>{d.mentions} mentions</div>
+                  </div>);
+                }} />
+                <Bar dataKey="mentions" radius={[0, 4, 4, 0]}>
+                  {competitorChartData.map((entry, idx) => (
+                    <Cell key={idx} fill={entry.isSirion ? t.brand : "#f97316"} fillOpacity={entry.isSirion ? 1 : 0.7} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           ) : emptyState("Run M2 scan to see competitor data", "m2", "#f97316")}
         </div>
       </div>
 
       {/* ── ROW 4: CLM LIFECYCLE + AUTHORITY RING ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        {/* Left: CLM Lifecycle */}
+        {/* Left: CLM Lifecycle Donut */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
             CLM Lifecycle Coverage
           </div>
           {totalQueries > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {clmData.map(d => {
-                const pct = totalQueries ? Math.round((d.count / totalQueries) * 100) : 0;
-                return (
-                  <div key={d.name}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{d.name}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)", color: d.color }}>{pct}%</span>
-                    </div>
-                    <div style={{ height: 8, background: t.border, borderRadius: 4, overflow: "hidden" }}>
-                      <div style={{ width: `${pct}%`, height: "100%", background: d.color, borderRadius: 4, transition: "width 0.5s ease" }} />
-                    </div>
-                    <div style={{ fontSize: 10, color: t.textDim, marginTop: 2, fontFamily: "var(--mono)" }}>
-                      {d.count}/{totalQueries} queries · {d.desc}
-                    </div>
-                  </div>
-                );
-              })}
+            <div>
+              <div style={{ position: "relative" }}>
+                <ResponsiveContainer width="100%" height={170}>
+                  <PieChart>
+                    <Pie data={clmDonutData} dataKey="count" nameKey="name" cx="50%" cy="50%"
+                      innerRadius={48} outerRadius={68} paddingAngle={3} strokeWidth={0}>
+                      {clmDonutData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                    </Pie>
+                    <Tooltip content={({ payload }) => {
+                      if (!payload?.length) return null;
+                      const d = payload[0].payload;
+                      const pct = totalQueries ? Math.round((d.count / totalQueries) * 100) : 0;
+                      return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
+                        <div style={{ fontWeight: 700, color: t.text }}>{d.name}</div>
+                        <div style={{ color: t.textDim }}>{d.count} queries ({pct}%)</div>
+                        <div style={{ color: t.textGhost, fontSize: 10 }}>{d.desc}</div>
+                      </div>);
+                    }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "var(--mono)", color: t.text }}>{totalQueries}</div>
+                  <div style={{ fontSize: 8, color: t.textDim, fontFamily: "var(--mono)", textTransform: "uppercase" }}>queries</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 14, marginTop: 4 }}>
+                {clmData.map(d => {
+                  const pct = totalQueries ? Math.round((d.count / totalQueries) * 100) : 0;
+                  return (<div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
+                    <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textSec }}>{d.name} {pct}%</span>
+                  </div>);
+                })}
+              </div>
               {clmCounts["pre-signature"] < clmCounts["post-signature"] && (
-                <div style={{ fontSize: 11, color: "#f59e0b", padding: "8px 10px", background: "#f59e0b10", borderRadius: 6, lineHeight: 1.5 }}>
-                  Pre-signature coverage is low. Create content targeting pre-sign queries to expand Sirion's perception beyond post-signature.
+                <div style={{ fontSize: 11, color: "#f59e0b", padding: "8px 10px", marginTop: 10, background: "#f59e0b10", borderRadius: 6, lineHeight: 1.5 }}>
+                  Pre-signature coverage is low. Create content targeting pre-sign queries.
                 </div>
               )}
             </div>
           ) : emptyState("Tag questions with lifecycle stages in M1", "m1", "#a78bfa")}
         </div>
 
-        {/* Right: Authority Ring Status */}
+        {/* Right: Authority Ring Treemap */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
             Authority Ring Status
           </div>
           {totalDomains > 0 ? (
             <div>
-              {/* Stacked horizontal bar */}
-              <div style={{ height: 28, display: "flex", borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
-                {authorityData.filter(d => d.value > 0).map(d => (
-                  <div key={d.name} style={{
-                    width: `${(d.value / totalDomains) * 100}%`, background: d.color,
-                    display: "flex", alignItems: "center", justifyContent: "center", minWidth: 20,
-                  }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", fontFamily: "var(--mono)" }}>{d.value}</span>
-                  </div>
-                ))}
-              </div>
+              {treemapData.length > 0 && (
+                <ResponsiveContainer width="100%" height={130}>
+                  <Treemap data={treemapData} dataKey="size" nameKey="name" content={<CustomTreemapCell />}
+                    isAnimationActive={true} animationDuration={600}>
+                    <Tooltip content={({ payload }) => {
+                      if (!payload?.length) return null;
+                      const d = payload[0].payload;
+                      const sl = { verified_zero: "Zero Presence", verified_present: "Present", verified_strong: "Strong" };
+                      return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
+                        <div style={{ fontWeight: 700, color: t.text }}>{d.fullDomain}</div>
+                        <div style={{ color: t.textDim }}>DA: {d.da} | {sl[d.status] || d.status}</div>
+                      </div>);
+                    }} />
+                  </Treemap>
+                </ResponsiveContainer>
+              )}
               {/* Legend */}
-              <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+              <div style={{ display: "flex", gap: 14, marginTop: 8, marginBottom: 10 }}>
                 {authorityData.map(d => (
                   <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
@@ -402,16 +482,13 @@ function Dashboard({ t, onNavigate }) {
               </div>
               {/* Top gap domains */}
               {topGapDomains.length > 0 && (
-                <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
-                  <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>TOP PRIORITY GAPS</div>
+                <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 8 }}>
+                  <div style={{ fontSize: 9, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 4 }}>TOP PRIORITY GAPS</div>
                   {topGapDomains.map((d, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", color: "#ef4444", width: 16 }}>{i + 1}</span>
-                      <span style={{ fontSize: 12, color: t.text, flex: 1 }}>{d.domain}</span>
-                      <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: t.textDim }}>DA {d.da}</span>
-                      <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textGhost, background: t.border + "60", padding: "1px 6px", borderRadius: 3 }}>
-                        P{Math.round(d.priority || 0)}
-                      </span>
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", color: "#ef4444", width: 14 }}>{i + 1}</span>
+                      <span style={{ fontSize: 11, color: t.text, flex: 1 }}>{d.domain}</span>
+                      <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textDim }}>DA {d.da}</span>
                     </div>
                   ))}
                 </div>
@@ -421,12 +498,12 @@ function Dashboard({ t, onNavigate }) {
         </div>
       </div>
 
-      {/* ── ROW 5: PERSONA COVERAGE ── */}
+      {/* ── ROW 5: PERSONA COVERAGE RINGS ── */}
       {m1Personas.length > 0 && (
         <div style={{ ...card({ padding: "16px 20px" }) }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
-              Persona Coverage ({m1Personas.length})
+              Persona Coverage
             </span>
             <button onClick={() => onNavigate("m1")} style={{
               padding: "4px 12px", borderRadius: 6, border: `1px solid ${t.border}`,
@@ -434,16 +511,13 @@ function Dashboard({ t, onNavigate }) {
               cursor: "pointer", fontFamily: "var(--mono)",
             }}>View All</button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 20, justifyContent: "center" }}>
             {m1Personas.slice(0, 6).map((p, i) => (
-              <div key={i} style={{ padding: "10px 12px", borderRadius: 8, background: t.bgAlt, border: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: p.researchSummary ? "#22c55e" : "#f59e0b", flexShrink: 0 }} />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
-                  <div style={{ fontSize: 10, color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title || p.company}</div>
-                </div>
-              </div>
+              <PersonaRing key={i} name={p.name} researched={Boolean(p.researchSummary)} t={t} />
             ))}
+          </div>
+          <div style={{ textAlign: "center", marginTop: 12, fontSize: 10, fontFamily: "var(--mono)", color: t.textDim }}>
+            {researchedPersonas.length}/{m1Personas.length} researched
           </div>
         </div>
       )}
