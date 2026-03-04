@@ -10,7 +10,7 @@ const PerceptionMonitor = lazy(() => import("./PerceptionMonitor"));
 const AuthorityRing = lazy(() => import("./AuthorityRing"));
 const BuyingStageGuide = lazy(() => import("./BuyingStageGuide"));
 const CLMAdvisor = lazy(() => import("./CLMAdvisor"));
-const VisualDemo = lazy(() => import("./VisualDemo"));
+
 
 /* ═══════════════════════════════════════════════════════
    XTRUSIO — AI Organic Growth Engine
@@ -26,7 +26,6 @@ const MODULES = [
   { id: "m4", n: "4", label: "Buying Stage Guide", icon: "\uD83E\uDDED" },
   { id: "m5", n: "5", label: "CLM Advisor", icon: "\u26A1" },
   { id: "settings", n: "\u2699", label: "Settings", section: "system" },
-  { id: "demo", n: "\u25B6", label: "Visual Demo", accent: true },
 ];
 
 const useIsMobile = () => {
@@ -620,7 +619,6 @@ export default function App() {
       case "m4": return <BuyingStageGuide />;
       case "m5": return <CLMAdvisor />;
       case "settings": return <SettingsPage t={t} />;
-      case "demo": return <VisualDemo />;
       default: return <Dashboard t={t} onNavigate={setActive} />;
     }
   };
