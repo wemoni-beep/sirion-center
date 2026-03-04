@@ -3486,8 +3486,9 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                   {/* ── STAGE FUNNEL (standard marketing shape) ── */}
                   {(() => {
                     const totalQs = questions.length;
-                    /* Fixed funnel widths: classic marketing funnel taper, NOT driven by question count */
-                    const funnelWidths = [100, 84, 68, 52, 38];
+                    /* Fixed funnel widths: classic marketing funnel taper, NOT driven by question count.
+                       Bottom must stay wide enough for label+count to breathe (~55% min). */
+                    const funnelWidths = [100, 88, 76, 64, 55];
                     return (
                       <div style={{
                         background: t.bgCard, border: `1px solid ${t.border}`,
