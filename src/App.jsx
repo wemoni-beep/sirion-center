@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, Component, lazy, Suspense } from "react";
 import { themes, ThemeContext } from "./ThemeContext";
 import { PipelineProvider, usePipeline } from "./PipelineContext";
 import { GOOGLE_FONTS_URL } from "./typography";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, RadialBarChart, RadialBar, Treemap } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, RadialBarChart, RadialBar } from "recharts";
 
 // BUG-009 fix: lazy-load heavy module components for code splitting
 const QuestionGenerator = lazy(() => import("./QuestionGenerator"));
@@ -79,22 +79,6 @@ const PersonaRing = ({ name, researched, t }) => {
         {name.split(" ")[0]}
       </div>
     </div>
-  );
-};
-
-const CustomTreemapCell = (props) => {
-  const { x, y, width, height, name, fill, da, root } = props;
-  if (width < 4 || height < 4) return null;
-  const t = root?._t || {};
-  return (
-    <g>
-      <rect x={x + 1} y={y + 1} width={width - 2} height={height - 2} rx={3} ry={3}
-        fill={fill} fillOpacity={0.8} stroke={t.bgCard || "#111114"} strokeWidth={2} />
-      {width > 44 && height > 22 && <text x={x + width / 2} y={y + height / 2 - (height > 36 ? 3 : 0)} textAnchor="middle" dominantBaseline="central"
-        fill="#fff" fontSize={9} fontWeight={700} fontFamily="var(--mono)">{name}</text>}
-      {width > 44 && height > 36 && <text x={x + width / 2} y={y + height / 2 + 11} textAnchor="middle"
-        fill="rgba(255,255,255,0.65)" fontSize={8} fontFamily="var(--mono)">DA {da}</text>}
-    </g>
   );
 };
 
@@ -214,17 +198,19 @@ function Dashboard({ t, onNavigate }) {
   // CLM donut data
   const clmDonutData = useMemo(() => clmData.filter(d => d.count > 0), [clmData]);
 
-  // Authority treemap data
-  const treemapData = useMemo(() => {
+  // Authority bar chart data — grouped by status (Strong > Present > Zero), sorted by DA within each group
+  const authorityBarData = useMemo(() => {
     if (!m3DomainsArr.length) return [];
-    const sc = { verified_zero: "#ef4444", verified_present: "#fbbf24", verified_strong: "#22c55e" };
-    return m3DomainsArr.map(d => ({
-      name: d.domain.replace(/\.(com|org|net|io|co)$/, ""),
-      fullDomain: d.domain, size: d.da || 50, da: d.da,
-      status: d.sirionStatus, fill: sc[d.sirionStatus] || "#ef4444",
-      priority: d.priority, _t: t,
-    }));
-  }, [m3DomainsArr.length, t]);
+    const sc = { verified_strong: "#22c55e", verified_present: "#fbbf24", verified_zero: "#ef4444" };
+    const order = { verified_strong: 0, verified_present: 1, verified_zero: 2 };
+    return [...m3DomainsArr]
+      .sort((a, b) => (order[a.sirionStatus] ?? 9) - (order[b.sirionStatus] ?? 9) || (b.da || 0) - (a.da || 0))
+      .map(d => ({
+        name: d.domain.replace(/\.(com|org|net|io|co)$/, "").slice(0, 14),
+        fullDomain: d.domain, da: d.da || 0,
+        status: d.sirionStatus, fill: sc[d.sirionStatus] || "#ef4444",
+      })).reverse(); // reversed for vertical layout (highest group on top)
+  }, [m3DomainsArr.length]);
 
   // Prioritized actions
   const actions = [];
@@ -448,31 +434,40 @@ function Dashboard({ t, onNavigate }) {
           ) : emptyState("Tag questions with lifecycle stages in M1", "m1", "#a78bfa")}
         </div>
 
-        {/* Right: Authority Ring Treemap */}
+        {/* Right: Authority Ring — Horizontal Bar Chart */}
         <div style={{ ...card({ padding: "18px 20px" }) }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)", marginBottom: 8 }}>
             Authority Ring Status
           </div>
           {totalDomains > 0 ? (
             <div>
-              {treemapData.length > 0 && (
-                <ResponsiveContainer width="100%" height={130}>
-                  <Treemap data={treemapData} dataKey="size" nameKey="name" content={<CustomTreemapCell />}
-                    isAnimationActive={true} animationDuration={600}>
+              {authorityBarData.length > 0 && (
+                <ResponsiveContainer width="100%" height={Math.max(authorityBarData.length * 18 + 30, 140)}>
+                  <BarChart data={authorityBarData} layout="vertical" margin={{ top: 2, right: 10, left: 2, bottom: 2 }}
+                    barCategoryGap="18%">
+                    <CartesianGrid strokeDasharray="3 3" stroke={t.border} horizontal={false} />
+                    <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 9, fill: t.textDim, fontFamily: "var(--mono)" }}
+                      axisLine={{ stroke: t.border }} tickLine={false} />
+                    <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 9, fill: t.textSec, fontFamily: "var(--mono)" }}
+                      axisLine={false} tickLine={false} />
                     <Tooltip content={({ payload }) => {
                       if (!payload?.length) return null;
                       const d = payload[0].payload;
                       const sl = { verified_zero: "Zero Presence", verified_present: "Present", verified_strong: "Strong" };
                       return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
                         <div style={{ fontWeight: 700, color: t.text }}>{d.fullDomain}</div>
-                        <div style={{ color: t.textDim }}>DA: {d.da} | {sl[d.status] || d.status}</div>
+                        <div style={{ color: d.fill, fontWeight: 600 }}>{sl[d.status] || d.status}</div>
+                        <div style={{ color: t.textDim }}>Domain Authority: {d.da}</div>
                       </div>);
                     }} />
-                  </Treemap>
+                    <Bar dataKey="da" barSize={6} radius={[0, 4, 4, 0]} isAnimationActive={true} animationDuration={600}>
+                      {authorityBarData.map((d, i) => <Cell key={i} fill={d.fill} fillOpacity={0.85} />)}
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               )}
               {/* Legend */}
-              <div style={{ display: "flex", gap: 14, marginTop: 8, marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 14, marginTop: 6, marginBottom: 8 }}>
                 {authorityData.map(d => (
                   <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
