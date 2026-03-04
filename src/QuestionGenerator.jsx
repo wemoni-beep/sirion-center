@@ -30,14 +30,14 @@ function cleanAIText(text) {
 }
 
 const PERSONAS = [
-  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC" },
-  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO" },
-  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO" },
-  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO" },
-  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO" },
-  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM" },
-  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD" },
-  { id: "cfo", label: "CFO", icon: "\uD83D\uDCB0", short: "CFO" },
+  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC", desc: "Owns legal risk, contract policy, and regulatory compliance", avatar: "https://i.pravatar.cc/80?img=60" },
+  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO", desc: "Drives sourcing strategy, vendor management, and cost optimization", avatar: "https://i.pravatar.cc/80?img=68" },
+  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO", desc: "Leads enterprise IT strategy, digital transformation, and integrations", avatar: "https://i.pravatar.cc/80?img=52" },
+  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO", desc: "Streamlines legal workflows, technology adoption, and team efficiency", avatar: "https://i.pravatar.cc/80?img=47" },
+  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO", desc: "Evaluates technical architecture, APIs, security, and scalability", avatar: "https://i.pravatar.cc/80?img=11" },
+  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM", desc: "Handles day-to-day contract authoring, tracking, and obligations", avatar: "https://i.pravatar.cc/80?img=32" },
+  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD", desc: "Manages procurement operations, supplier relationships, and spend", avatar: "https://i.pravatar.cc/80?img=57" },
+  { id: "cfo", label: "CFO", icon: "\uD83D\uDCB0", short: "CFO", desc: "Oversees financial risk, contract value leakage, and ROI accountability", avatar: "https://i.pravatar.cc/80?img=13" },
 ];
 
 const STAGES = [
@@ -2555,19 +2555,27 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
         <>
           {/* Personas */}
           <label style={{ ...label, marginBottom: 10 }}>Target Personas ({activePersonas.size} selected)</label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 20 }}>
             {PERSONAS.map(p => {
               const on = activePersonas.has(p.id);
               return (
-                <button key={p.id} onClick={() => togglePersona(p.id)} style={{
-                  padding: "10px 12px", borderRadius: 8, cursor: "pointer", textAlign: "left",
+                <button key={p.id} onClick={() => togglePersona(p.id)} title={p.desc} style={{
+                  padding: "12px 14px", borderRadius: 10, cursor: "pointer", textAlign: "left",
+                  display: "flex", alignItems: "center", gap: 12,
                   background: on ? (t.mode === "dark" ? "rgba(167,139,250,0.1)" : "rgba(124,58,237,0.06)") : "transparent",
                   border: `1px solid ${on ? t.brand + "40" : t.border}`,
                   transition: "all 0.15s",
                 }}>
-                  <div style={{ fontSize: 16, marginBottom: 4 }}>{p.icon}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: on ? t.text : t.textDim }}>{p.short}</div>
-                  <div style={{ fontSize: 11, color: t.textGhost, marginTop: 2 }}>{p.label}</div>
+                  <img src={p.avatar} alt={p.short} style={{
+                    width: 42, height: 42, borderRadius: "50%", objectFit: "cover", flexShrink: 0,
+                    border: `2px solid ${on ? t.brand + "60" : t.border}`,
+                    filter: on ? "none" : "grayscale(0.4) opacity(0.75)",
+                    transition: "all 0.2s",
+                  }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: on ? t.text : t.textDim, lineHeight: 1.2 }}>{p.label}</div>
+                    <div style={{ fontSize: 10, color: t.textGhost, marginTop: 2, fontFamily: "var(--mono)" }}>{p.short}</div>
+                  </div>
                 </button>
               );
             })}
