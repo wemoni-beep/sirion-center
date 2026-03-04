@@ -49,15 +49,15 @@ const STAGES = [
 ];
 
 const CLUSTERS_META = [
-  { name: "Contract AI / Automation", weight: 95, trend: "rising", color: "#a78bfa", desc: "AI-powered contract drafting, clause extraction, risk scoring, and automated workflows", why: "Fastest-growing CLM segment — every enterprise RFP now asks about AI capabilities" },
-  { name: "CLM Platform Selection", weight: 82, trend: "rising", color: "#60a5fa", desc: "Evaluating and comparing CLM vendors, feature matrices, and analyst rankings", why: "Buyers actively researching — high-intent queries that drive pipeline" },
-  { name: "Post-Signature / Obligations", weight: 88, trend: "stable", color: "#34d399", desc: "Obligation tracking, compliance monitoring, SLA management, and renewal automation", why: "Sirion's core strength — where the deepest competitive moat exists" },
-  { name: "Procurement CLM", weight: 70, trend: "rising", color: "#fbbf24", desc: "Contract management for procurement teams, supplier risk, and spend optimization", why: "Growing buyer segment as procurement teams adopt CLM independently" },
-  { name: "Enterprise Scale", weight: 65, trend: "stable", color: "#f472b6", desc: "Large-scale deployments, multi-entity support, global compliance, and integrations", why: "Table-stakes for enterprise deals — validates Sirion for Fortune 500" },
-  { name: "Financial Services CLM", weight: 58, trend: "stable", color: "#38bdf8", desc: "Regulatory compliance, ISDA agreements, fund administration, and banking contracts", why: "High-value vertical — financial services contracts are complex and high-revenue" },
-  { name: "Implementation & ROI", weight: 72, trend: "rising", color: "#fb923c", desc: "Deployment timelines, total cost of ownership, measurable ROI, and success metrics", why: "CFO-facing content — critical for closing deals and justifying investment" },
-  { name: "Analyst Rankings", weight: 60, trend: "stable", color: "#c084fc", desc: "Gartner, Forrester, IDC, and Spend Matters evaluations and positioning", why: "Third-party validation that influences mid-funnel buyer decisions" },
-  { name: "Agentic CLM", weight: 90, trend: "rising", color: "#4ade80", desc: "Autonomous AI agents for contract negotiation, auto-remediation, and intelligent workflows", why: "Next-gen differentiator — positions Sirion ahead of legacy CLM vendors" },
+  { name: "Contract AI / Automation", weight: 95, trend: "rising", color: "#a78bfa", desc: "AI-powered contract drafting, clause extraction, risk scoring, and automated workflows", why: "AI in CLM market at 26.5% CAGR — 80% of enterprises will have GenAI by 2026" },
+  { name: "CLM Platform Selection", weight: 85, trend: "rising", color: "#60a5fa", desc: "Evaluating and comparing CLM vendors, feature matrices, and analyst rankings", why: "40%+ of buyers replace first CLM within 3 years — constant re-evaluation cycle" },
+  { name: "Post-Signature / Obligations", weight: 88, trend: "rising", color: "#34d399", desc: "Obligation tracking, compliance monitoring, SLA management, and renewal automation", why: "9.2% of annual contract value lost post-signature per World Commerce & Contracting" },
+  { name: "Procurement CLM", weight: 74, trend: "rising", color: "#fbbf24", desc: "Contract management for procurement teams, supplier risk, and spend optimization", why: "80% of CPOs plan GenAI deployment — AI in procurement market projected $39B by 2035" },
+  { name: "Enterprise Scale", weight: 65, trend: "stable", color: "#f472b6", desc: "Large-scale deployments, multi-entity support, global compliance, and integrations", why: "Table-stakes for Fortune 500 — cloud-native multi-entity is expected, not differentiating" },
+  { name: "Financial Services CLM", weight: 58, trend: "stable", color: "#38bdf8", desc: "Regulatory compliance, ISDA agreements, fund administration, and banking contracts", why: "Banking compliance costs up 60% per Deloitte — high-value but narrow audience" },
+  { name: "Implementation & ROI", weight: 78, trend: "rising", color: "#fb923c", desc: "Deployment timelines, total cost of ownership, measurable ROI, and success metrics", why: "Integration costs can exceed license costs — 40% CLM failure rate drives TCO anxiety" },
+  { name: "Analyst Rankings", weight: 62, trend: "stable", color: "#c084fc", desc: "Gartner, Forrester, IDC, and Spend Matters evaluations and positioning", why: "Forrester Wave Q1 2025 evaluated 12 CLM vendors — influential but buyers start with GenAI search" },
+  { name: "Agentic CLM", weight: 82, trend: "rising", color: "#4ade80", desc: "Autonomous AI agents for contract negotiation, auto-remediation, and intelligent workflows", why: "Hottest trend per KPMG and DocuSign — but still emerging, not yet mainstream revenue" },
 ];
 const CLUSTERS = CLUSTERS_META.map(c => c.name);
 
@@ -750,6 +750,16 @@ export default function QuestionGenerator({ onNavigate }) {
   const [activePersonas, setActivePersonas] = useState(new Set(PERSONAS.map(p => p.id)));
   const [activeClusters, setActiveClusters] = useState(new Set(CLUSTERS));
   const [hoveredBubble, setHoveredBubble] = useState(null);
+
+  // ── Cluster recalibration state ──
+  const [clusterWeights, setClusterWeights] = useState(() => {
+    try { const s = localStorage.getItem("xt_cluster_cal"); if (s) return JSON.parse(s).weights; } catch {} return null;
+  });
+  const [lastCalibrated, setLastCalibrated] = useState(() => {
+    try { const s = localStorage.getItem("xt_cluster_cal"); if (s) return JSON.parse(s).ts; } catch {} return null;
+  });
+  const [calibrating, setCalibrating] = useState(false);
+  const [calibrationStep, setCalibrationStep] = useState("");
   const [generated, setGenerated] = useState(false);
   const [filterStage, setFilterStage] = useState("all");
   const [filterPersona, setFilterPersona] = useState("all");
@@ -1208,6 +1218,90 @@ export default function QuestionGenerator({ onNavigate }) {
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generated, questions.length]);
+
+  // ══════════════════════════════════════════════════════
+  // CLUSTER IMPORTANCE RECALIBRATION (web search)
+  // ══════════════════════════════════════════════════════
+  const CALIBRATION_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+  const canRecalibrate = !lastCalibrated || (Date.now() - lastCalibrated > CALIBRATION_COOLDOWN_MS);
+
+  const nextCalibrationDate = lastCalibrated
+    ? new Date(lastCalibrated + CALIBRATION_COOLDOWN_MS).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : null;
+
+  const handleRecalibrate = async () => {
+    if (!canRecalibrate || calibrating) return;
+    setCalibrating(true);
+    setCalibrationStep("Searching market data...");
+    try {
+      const clusterNames = CLUSTERS_META.map(c => c.name).join(", ");
+      const systemPrompt = `You are a B2B SaaS market analyst specializing in Contract Lifecycle Management (CLM). You will receive a list of CLM topic clusters. For each cluster, use current web data to assess its MARKET IMPORTANCE (0-100) and TREND (rising/stable/declining).
+
+Base your scores on:
+- Search volume and buyer interest signals
+- Analyst report mentions (Gartner, Forrester, IDC)
+- Industry news and investment activity
+- Community discussions (Reddit, LinkedIn, G2)
+- Vendor marketing emphasis
+
+Return ONLY a valid JSON array, no markdown, no explanation:
+[{"name":"exact cluster name","weight":number,"trend":"rising|stable|declining","evidence":"one sentence citing specific data"}]
+
+The weight should reflect RELATIVE importance to CLM buyers right now. The highest-demand cluster should be 90-98, the lowest 45-65. Be precise — don't cluster them all around 70-80.`;
+
+      const userMsg = `Analyze the current market importance of these CLM topic clusters as of ${new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })}:\n\n${clusterNames}\n\nUse web search to find current data on each cluster's demand, growth, and buyer interest in the CLM market.`;
+
+      setCalibrationStep("Analyzing CLM market signals...");
+      const raw = await callClaude(systemPrompt, userMsg, 90000);
+
+      setCalibrationStep("Processing results...");
+      // Extract JSON from response
+      let parsed;
+      try {
+        const jsonMatch = raw.match(/\[[\s\S]*\]/);
+        parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
+      } catch (e) {
+        throw new Error("Could not parse recalibration response");
+      }
+
+      // Validate and merge — only update clusters we recognize
+      const weightMap = {};
+      for (const item of parsed) {
+        const match = CLUSTERS_META.find(c => c.name.toLowerCase() === item.name?.toLowerCase());
+        if (match && typeof item.weight === "number" && item.weight >= 0 && item.weight <= 100) {
+          weightMap[match.name] = {
+            weight: Math.round(item.weight),
+            trend: ["rising", "stable", "declining"].includes(item.trend) ? item.trend : match.trend,
+            evidence: item.evidence || "",
+          };
+        }
+      }
+
+      if (Object.keys(weightMap).length < 5) {
+        throw new Error(`Only ${Object.keys(weightMap).length} clusters matched — expected at least 5`);
+      }
+
+      const ts = Date.now();
+      const calData = { weights: weightMap, ts };
+      localStorage.setItem("xt_cluster_cal", JSON.stringify(calData));
+      setClusterWeights(weightMap);
+      setLastCalibrated(ts);
+      setCalibrationStep("");
+    } catch (err) {
+      console.error("[Recalibrate]", err);
+      setCalibrationStep("Error: " + (err.message || "recalibration failed"));
+      setTimeout(() => setCalibrationStep(""), 5000);
+    } finally {
+      setCalibrating(false);
+    }
+  };
+
+  // Build effective cluster data (merge defaults with calibrated weights)
+  const effectiveClusters = CLUSTERS_META.map(c => {
+    const cal = clusterWeights?.[c.name];
+    return cal ? { ...c, weight: cal.weight, trend: cal.trend, evidence: cal.evidence } : c;
+  });
 
   // ══════════════════════════════════════════════════════
   // QUESTION GENERATION
@@ -2584,10 +2678,33 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
           </div>
 
           {/* Topic Clusters — Bubble Chart */}
-          <label style={{ ...label, marginBottom: 10 }}>Topic Clusters ({activeClusters.size} selected)</label>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <label style={{ ...label, marginBottom: 0 }}>Topic Clusters ({activeClusters.size} selected)</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {lastCalibrated && (
+                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                  Calibrated {new Date(lastCalibrated).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                </span>
+              )}
+              <button onClick={handleRecalibrate} disabled={!canRecalibrate || calibrating}
+                style={{
+                  fontSize: 10, fontWeight: 700, fontFamily: "var(--mono)", letterSpacing: 0.5,
+                  padding: "5px 12px", borderRadius: 6, border: "none", cursor: canRecalibrate && !calibrating ? "pointer" : "default",
+                  background: canRecalibrate && !calibrating
+                    ? "linear-gradient(135deg, #818cf8, #6366f1)"
+                    : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"),
+                  color: canRecalibrate && !calibrating ? "#fff" : t.textGhost,
+                  opacity: canRecalibrate && !calibrating ? 1 : 0.5,
+                  transition: "all 0.2s",
+                  boxShadow: canRecalibrate && !calibrating ? "0 2px 8px rgba(99,102,241,0.3)" : "none",
+                }}>
+                {calibrating ? calibrationStep || "Calibrating..." : canRecalibrate ? "Recalibrate Importance" : `Next: ${nextCalibrationDate}`}
+              </button>
+            </div>
+          </div>
           {(() => {
             const W = 800, H = 400;
-            const sorted = [...CLUSTERS_META].sort((a, b) => b.weight - a.weight);
+            const sorted = [...effectiveClusters].sort((a, b) => b.weight - a.weight);
             const wMin = Math.min(...sorted.map(c => c.weight));
             const wMax = Math.max(...sorted.map(c => c.weight));
             const minR = 44, maxR = 82;
@@ -2753,6 +2870,11 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                       </div>
                       <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5, marginBottom: 8 }}>{hb.desc}</div>
                       <div style={{ fontSize: 10, color: hb.color, lineHeight: 1.4, fontStyle: "italic" }}>{hb.why}</div>
+                      {hb.evidence && (
+                        <div style={{ fontSize: 9, color: t.textGhost, lineHeight: 1.4, marginTop: 4, borderTop: `1px solid ${t.border}`, paddingTop: 4 }}>
+                          {hb.evidence}
+                        </div>
+                      )}
                       <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>IMPORTANCE</span>
                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
