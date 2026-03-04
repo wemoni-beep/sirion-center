@@ -48,17 +48,18 @@ const STAGES = [
   { id: "validation", label: "Validation", color: "#fb923c" },
 ];
 
-const CLUSTERS = [
-  "Contract AI / Automation",
-  "CLM Platform Selection",
-  "Post-Signature / Obligations",
-  "Procurement CLM",
-  "Enterprise Scale",
-  "Financial Services CLM",
-  "Implementation & ROI",
-  "Analyst Rankings",
-  "Agentic CLM",
+const CLUSTERS_META = [
+  { name: "Contract AI / Automation", weight: 95, trend: "rising", color: "#a78bfa", desc: "AI-powered contract drafting, clause extraction, risk scoring, and automated workflows", why: "Fastest-growing CLM segment — every enterprise RFP now asks about AI capabilities" },
+  { name: "CLM Platform Selection", weight: 82, trend: "rising", color: "#60a5fa", desc: "Evaluating and comparing CLM vendors, feature matrices, and analyst rankings", why: "Buyers actively researching — high-intent queries that drive pipeline" },
+  { name: "Post-Signature / Obligations", weight: 88, trend: "stable", color: "#34d399", desc: "Obligation tracking, compliance monitoring, SLA management, and renewal automation", why: "Sirion's core strength — where the deepest competitive moat exists" },
+  { name: "Procurement CLM", weight: 70, trend: "rising", color: "#fbbf24", desc: "Contract management for procurement teams, supplier risk, and spend optimization", why: "Growing buyer segment as procurement teams adopt CLM independently" },
+  { name: "Enterprise Scale", weight: 65, trend: "stable", color: "#f472b6", desc: "Large-scale deployments, multi-entity support, global compliance, and integrations", why: "Table-stakes for enterprise deals — validates Sirion for Fortune 500" },
+  { name: "Financial Services CLM", weight: 58, trend: "stable", color: "#38bdf8", desc: "Regulatory compliance, ISDA agreements, fund administration, and banking contracts", why: "High-value vertical — financial services contracts are complex and high-revenue" },
+  { name: "Implementation & ROI", weight: 72, trend: "rising", color: "#fb923c", desc: "Deployment timelines, total cost of ownership, measurable ROI, and success metrics", why: "CFO-facing content — critical for closing deals and justifying investment" },
+  { name: "Analyst Rankings", weight: 60, trend: "stable", color: "#c084fc", desc: "Gartner, Forrester, IDC, and Spend Matters evaluations and positioning", why: "Third-party validation that influences mid-funnel buyer decisions" },
+  { name: "Agentic CLM", weight: 90, trend: "rising", color: "#4ade80", desc: "Autonomous AI agents for contract negotiation, auto-remediation, and intelligent workflows", why: "Next-gen differentiator — positions Sirion ahead of legacy CLM vendors" },
 ];
+const CLUSTERS = CLUSTERS_META.map(c => c.name);
 
 /* ── CLM Lifecycle Stages ──────────────────────────────
    Pre-Signature: Authoring, templates, redlining, negotiation, workflow, approvals
@@ -2581,24 +2582,138 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
             })}
           </div>
 
-          {/* Topic Clusters */}
+          {/* Topic Clusters — Bubble Chart */}
           <label style={{ ...label, marginBottom: 10 }}>Topic Clusters ({activeClusters.size} selected)</label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-            {CLUSTERS.map(c => {
-              const on = activeClusters.has(c);
-              return (
-                <button key={c} onClick={() => toggleCluster(c)} style={{
-                  padding: "6px 14px", borderRadius: 20, cursor: "pointer",
-                  background: on ? (t.mode === "dark" ? "rgba(167,139,250,0.12)" : "rgba(124,58,237,0.08)") : "transparent",
-                  border: `1px solid ${on ? t.brand + "40" : t.border}`,
-                  color: on ? t.brand : t.textDim, fontSize: 11, fontWeight: 600,
-                  fontFamily: "var(--body)", transition: "all 0.15s",
-                }}>
-                  {c}
-                </button>
-              );
-            })}
-          </div>
+          {(() => {
+            const W = 800, H = 400;
+            const sorted = [...CLUSTERS_META].sort((a, b) => b.weight - a.weight);
+            const wMin = Math.min(...sorted.map(c => c.weight));
+            const wMax = Math.max(...sorted.map(c => c.weight));
+            const minR = 44, maxR = 82;
+            const bubbles = sorted.map(c => ({
+              ...c, r: minR + ((c.weight - wMin) / (wMax - wMin || 1)) * (maxR - minR),
+            }));
+            // Force-relaxation packing: place all, then push apart iteratively
+            const placed = [];
+            const pad = 6;
+            // Initial placement: distribute across width with jitter
+            const cols = Math.ceil(Math.sqrt(bubbles.length * (W / H)));
+            const rows = Math.ceil(bubbles.length / cols);
+            bubbles.forEach((b, i) => {
+              const col = i % cols, row = Math.floor(i / cols);
+              const cellW = W / cols, cellH = H / rows;
+              b.cx = cellW * (col + 0.5) + (Math.sin(i * 7.3) * cellW * 0.15);
+              b.cy = cellH * (row + 0.5) + (Math.cos(i * 5.1) * cellH * 0.15);
+              b.cx = Math.max(b.r + pad, Math.min(W - b.r - pad, b.cx));
+              b.cy = Math.max(b.r + pad, Math.min(H - b.r - pad, b.cy));
+            });
+            // Relaxation: push overlapping circles apart, pull toward center gently
+            for (let iter = 0; iter < 120; iter++) {
+              bubbles.forEach((a, i) => {
+                let fx = 0, fy = 0;
+                bubbles.forEach((b, j) => {
+                  if (i === j) return;
+                  const dx = a.cx - b.cx, dy = a.cy - b.cy;
+                  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                  const minDist = a.r + b.r + pad;
+                  if (dist < minDist) {
+                    const push = (minDist - dist) * 0.35;
+                    fx += (dx / dist) * push;
+                    fy += (dy / dist) * push;
+                  }
+                });
+                // Gentle gravity toward center
+                fx += (W / 2 - a.cx) * 0.003;
+                fy += (H / 2 - a.cy) * 0.004;
+                a.cx += fx; a.cy += fy;
+                a.cx = Math.max(a.r + pad, Math.min(W - a.r - pad, a.cx));
+                a.cy = Math.max(a.r + pad, Math.min(H - a.r - pad, a.cy));
+              });
+            }
+            // Word-wrap text to fit inside circle (use 1.7x radius as available text width)
+            const wrapText = (name, r) => {
+              const short = name.replace(" / ", " / ").replace(" & ", " & ");
+              const words = short.split(" ");
+              const fontSize = r >= 65 ? 12 : r >= 50 ? 11 : 10;
+              const charW = fontSize * 0.5;
+              const maxLineW = r * 1.7;
+              const maxChars = Math.floor(maxLineW / charW);
+              const lines = [];
+              let cur = "";
+              words.forEach(w => {
+                if ((cur + " " + w).trim().length <= maxChars) cur = (cur + " " + w).trim();
+                else { if (cur) lines.push(cur); cur = w; }
+              });
+              if (cur) lines.push(cur);
+              return { lines: lines.slice(0, 3), fontSize };
+            };
+            return (
+              <div style={{ width: "100%", marginBottom: 20 }}>
+                <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+                  <defs>
+                    {bubbles.map(b => (
+                      <clipPath key={`clip-${b.name}`} id={`bclip-${b.name.replace(/[^a-z0-9]/gi, "")}`}>
+                        <circle cx={b.cx} cy={b.cy} r={b.r - 4} />
+                      </clipPath>
+                    ))}
+                  </defs>
+                  {bubbles.map(b => {
+                    const on = activeClusters.has(b.name);
+                    const { lines, fontSize } = wrapText(b.name, b.r);
+                    const clipId = `bclip-${b.name.replace(/[^a-z0-9]/gi, "")}`;
+                    const baseColor = b.color;
+                    const fillColor = on
+                      ? baseColor + (t.mode === "dark" ? "22" : "18")
+                      : (t.mode === "dark" ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)");
+                    const strokeColor = on ? baseColor + "90" : (t.mode === "dark" ? baseColor + "30" : baseColor + "20");
+                    const textColor = on ? (t.mode === "dark" ? "#fff" : "#1e1b4b") : t.textDim;
+                    const lineH = fontSize + 3;
+                    const textBlockH = lines.length * lineH;
+                    const textStartY = b.cy - textBlockH / 2 + fontSize * 0.4;
+                    return (
+                      <g key={b.name} onClick={() => toggleCluster(b.name)} style={{ cursor: "pointer" }}>
+                        <circle cx={b.cx} cy={b.cy} r={b.r} fill={fillColor} stroke={strokeColor}
+                          strokeWidth={on ? 2.5 : 1.5} opacity={on ? 1 : 0.7}
+                          style={{ transition: "all 0.25s ease" }}>
+                          <title>{`${b.name}${b.trend === "rising" ? "  RISING DEMAND" : ""}\n\n${b.desc}\n\nWhy it matters: ${b.why}\n\nImportance: ${b.weight}/100`}</title>
+                        </circle>
+                        {on && <circle cx={b.cx} cy={b.cy} r={b.r + 3} fill="none" stroke={baseColor + "25"}
+                          strokeWidth={1} style={{ transition: "all 0.25s" }} />}
+                        <g clipPath={`url(#${clipId})`} style={{ pointerEvents: "none" }}>
+                          {lines.map((ln, i) => (
+                            <text key={i} x={b.cx} y={textStartY + i * lineH}
+                              textAnchor="middle" dominantBaseline="central"
+                              fill={textColor} fontSize={fontSize} fontWeight={700}
+                              fontFamily="var(--mono)" opacity={on ? 1 : 0.7}>
+                              {ln}
+                            </text>
+                          ))}
+                        </g>
+                        {b.trend === "rising" && (
+                          <g style={{ pointerEvents: "none" }}>
+                            <circle cx={b.cx + b.r * 0.55} cy={b.cy - b.r * 0.55} r={b.r >= 60 ? 10 : 8}
+                              fill={on ? "#059669" : (t.mode === "dark" ? "#064e3b" : "#d1fae5")}
+                              stroke={on ? "#34d39960" : "#34d39930"} strokeWidth={1} />
+                            <text x={b.cx + b.r * 0.55} y={b.cy - b.r * 0.55 + 0.5}
+                              textAnchor="middle" dominantBaseline="central"
+                              fill={on ? "#ecfdf5" : "#6ee7b780"} fontSize={b.r >= 60 ? 11 : 9} fontWeight={900}>
+                              {"\u2191"}
+                            </text>
+                          </g>
+                        )}
+                        <text x={b.cx} y={b.cy + b.r * 0.55} textAnchor="middle" dominantBaseline="central"
+                          fill={on ? baseColor : baseColor + "50"} fontSize={8} fontWeight={600}
+                          fontFamily="var(--mono)" style={{ pointerEvents: "none" }}
+                          clipPath={`url(#${clipId})`}>
+                          {b.weight}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            );
+          })()}
 
           {/* Persona-specific generation selector */}
           {companyPersonas.filter(p => p.researchedAt).length > 0 && (
