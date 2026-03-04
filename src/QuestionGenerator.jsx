@@ -30,14 +30,14 @@ function cleanAIText(text) {
 }
 
 const PERSONAS = [
-  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC", desc: "Owns legal risk, contract policy, and regulatory compliance", avatar: "https://i.pravatar.cc/80?img=60" },
-  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO", desc: "Drives sourcing strategy, vendor management, and cost optimization", avatar: "https://i.pravatar.cc/80?img=68" },
-  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO", desc: "Leads enterprise IT strategy, digital transformation, and integrations", avatar: "https://i.pravatar.cc/80?img=52" },
-  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO", desc: "Streamlines legal workflows, technology adoption, and team efficiency", avatar: "https://i.pravatar.cc/80?img=47" },
-  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO", desc: "Evaluates technical architecture, APIs, security, and scalability", avatar: "https://i.pravatar.cc/80?img=11" },
-  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM", desc: "Handles day-to-day contract authoring, tracking, and obligations", avatar: "https://i.pravatar.cc/80?img=32" },
-  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD", desc: "Manages procurement operations, supplier relationships, and spend", avatar: "https://i.pravatar.cc/80?img=57" },
-  { id: "cfo", label: "CFO", icon: "\uD83D\uDCB0", short: "CFO", desc: "Oversees financial risk, contract value leakage, and ROI accountability", avatar: "https://i.pravatar.cc/80?img=13" },
+  { id: "gc", label: "General Counsel", icon: "\u2696", short: "GC", influence: 85, desc: "Owns legal risk, contract policy, and regulatory compliance", avatar: "https://i.pravatar.cc/80?img=60" },
+  { id: "cpo", label: "Chief Procurement Officer", icon: "\uD83D\uDCCB", short: "CPO", influence: 65, desc: "Drives sourcing strategy, vendor management, and cost optimization", avatar: "https://i.pravatar.cc/80?img=68" },
+  { id: "cio", label: "Chief Information Officer", icon: "\uD83D\uDCBB", short: "CIO", influence: 50, desc: "Leads enterprise IT strategy, digital transformation, and integrations", avatar: "https://i.pravatar.cc/80?img=52" },
+  { id: "vplo", label: "VP Legal Operations", icon: "\u2699", short: "VP LO", influence: 75, desc: "Streamlines legal workflows, technology adoption, and team efficiency", avatar: "https://i.pravatar.cc/80?img=47" },
+  { id: "cto", label: "VP IT / CTO", icon: "\uD83D\uDD27", short: "CTO", influence: 45, desc: "Evaluates technical architecture, APIs, security, and scalability", avatar: "https://i.pravatar.cc/80?img=11" },
+  { id: "cm", label: "Contract Manager", icon: "\uD83D\uDCC4", short: "CM", influence: 30, desc: "Handles day-to-day contract authoring, tracking, and obligations", avatar: "https://i.pravatar.cc/80?img=32" },
+  { id: "pd", label: "Procurement Director", icon: "\uD83C\uDFE2", short: "PD", influence: 38, desc: "Manages procurement operations, supplier relationships, and spend", avatar: "https://i.pravatar.cc/80?img=57" },
+  { id: "cfo", label: "CFO", icon: "\uD83D\uDCB0", short: "CFO", influence: 55, desc: "Oversees financial risk, contract value leakage, and ROI accountability", avatar: "https://i.pravatar.cc/80?img=13" },
 ];
 
 const STAGES = [
@@ -750,6 +750,10 @@ export default function QuestionGenerator({ onNavigate }) {
   const [activePersonas, setActivePersonas] = useState(new Set(PERSONAS.map(p => p.id)));
   const [activeClusters, setActiveClusters] = useState(new Set(CLUSTERS));
   const [hoveredBubble, setHoveredBubble] = useState(null);
+  const [hoveredPersonaBar, setHoveredPersonaBar] = useState(null);
+
+  // ── Sorted personas for influence funnel ──
+  const sortedPersonas = useMemo(() => [...PERSONAS].sort((a, b) => b.influence - a.influence), []);
 
   // ── Cluster recalibration state ──
   const [clusterWeights, setClusterWeights] = useState(() => {
@@ -2649,29 +2653,66 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
 
       {activeTab === "questions" && (
         <>
-          {/* Personas */}
+          {/* Personas — Influence Funnel */}
           <label style={{ ...label, marginBottom: 10 }}>Target Personas ({activePersonas.size} selected)</label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 20 }}>
-            {PERSONAS.map(p => {
+          <div style={{
+            display: "flex", alignItems: "flex-end", gap: 0, marginBottom: 20,
+            padding: "18px 10px 0", borderRadius: 12,
+            background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
+            border: `1px solid ${t.border}`,
+            overflow: "hidden",
+          }}>
+            {sortedPersonas.map((p, i) => {
               const on = activePersonas.has(p.id);
+              const hov = hoveredPersonaBar === p.id;
+              const maxH = 130;
+              const barH = Math.max(24, (p.influence / 100) * maxH);
+              const barColor = on
+                ? (t.mode === "dark" ? "rgba(167,139,250,0.55)" : "rgba(124,58,237,0.35)")
+                : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)");
+              const barBorder = on ? t.brand + "50" : t.border;
               return (
-                <button key={p.id} onClick={() => togglePersona(p.id)} title={p.desc} style={{
-                  padding: "12px 14px", borderRadius: 10, cursor: "pointer", textAlign: "left",
-                  display: "flex", alignItems: "center", gap: 12,
-                  background: on ? (t.mode === "dark" ? "rgba(167,139,250,0.1)" : "rgba(124,58,237,0.06)") : "transparent",
-                  border: `1px solid ${on ? t.brand + "40" : t.border}`,
-                  transition: "all 0.15s",
-                }}>
-                  <img src={p.avatar} alt={p.short} style={{
-                    width: 42, height: 42, borderRadius: "50%", objectFit: "cover", flexShrink: 0,
-                    border: `2px solid ${on ? t.brand + "60" : t.border}`,
-                    filter: on ? "none" : "grayscale(0.4) opacity(0.75)",
-                    transition: "all 0.2s",
+                <button key={p.id} onClick={() => togglePersona(p.id)} title={p.desc}
+                  onMouseEnter={() => setHoveredPersonaBar(p.id)}
+                  onMouseLeave={() => setHoveredPersonaBar(null)}
+                  style={{
+                    flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                    background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                    transition: "transform 0.2s", transform: hov ? "translateY(-3px)" : "none",
+                  }}>
+                  {/* Percentage */}
+                  <div style={{
+                    fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
+                    color: on ? t.text : t.textGhost, marginBottom: 6,
+                    opacity: hov ? 1 : 0.8, transition: "opacity 0.2s",
+                  }}>{p.influence}%</div>
+                  {/* Bar */}
+                  <div style={{
+                    width: "70%", height: barH, borderRadius: "6px 6px 0 0",
+                    background: hov && on
+                      ? (t.mode === "dark" ? "rgba(167,139,250,0.7)" : "rgba(124,58,237,0.45)")
+                      : barColor,
+                    border: `1px solid ${barBorder}`, borderBottom: "none",
+                    transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
+                    boxShadow: hov && on ? `0 0 12px ${t.brand}30` : "none",
                   }} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: on ? t.text : t.textDim, lineHeight: 1.2 }}>{p.label}</div>
-                    <div style={{ fontSize: 10, color: t.textGhost, marginTop: 2, fontFamily: "var(--mono)" }}>{p.short}</div>
+                  {/* Avatar */}
+                  <div style={{
+                    width: 34, height: 34, borderRadius: "50%", overflow: "hidden",
+                    border: `2px solid ${on ? t.brand + "60" : t.border}`,
+                    margin: "8px 0 4px",
+                    filter: on ? "none" : "grayscale(0.5) opacity(0.6)",
+                    transition: "all 0.25s",
+                    transform: hov ? "scale(1.12)" : "scale(1)",
+                  }}>
+                    <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   </div>
+                  {/* Label */}
+                  <div style={{
+                    fontSize: 9, fontWeight: 600, color: on ? t.text : t.textGhost,
+                    lineHeight: 1.2, textAlign: "center", marginBottom: 10,
+                    maxWidth: 72, fontFamily: "var(--mono)",
+                  }}>{p.label.length > 14 ? p.short : p.label}</div>
                 </button>
               );
             })}
