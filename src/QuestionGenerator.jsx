@@ -2678,29 +2678,24 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
           </div>
 
           {/* Topic Clusters — Bubble Chart */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 10 }}>
             <label style={{ ...label, marginBottom: 0 }}>Topic Clusters ({activeClusters.size} selected)</label>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {lastCalibrated && (
-                <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                  Calibrated {new Date(lastCalibrated).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                </span>
-              )}
-              <button onClick={handleRecalibrate} disabled={!canRecalibrate || calibrating}
-                style={{
-                  fontSize: 10, fontWeight: 700, fontFamily: "var(--mono)", letterSpacing: 0.5,
-                  padding: "5px 12px", borderRadius: 6, border: "none", cursor: canRecalibrate && !calibrating ? "pointer" : "default",
-                  background: canRecalibrate && !calibrating
-                    ? "linear-gradient(135deg, #818cf8, #6366f1)"
-                    : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"),
-                  color: canRecalibrate && !calibrating ? "#fff" : t.textGhost,
-                  opacity: canRecalibrate && !calibrating ? 1 : 0.5,
-                  transition: "all 0.2s",
-                  boxShadow: canRecalibrate && !calibrating ? "0 2px 8px rgba(99,102,241,0.3)" : "none",
-                }}>
-                {calibrating ? calibrationStep || "Calibrating..." : canRecalibrate ? "Recalibrate Importance" : `Next: ${nextCalibrationDate}`}
-              </button>
-            </div>
+            <button onClick={handleRecalibrate} disabled={!canRecalibrate || calibrating}
+              style={{
+                fontSize: 10, fontFamily: "var(--mono)", background: "none", border: "none", padding: 0,
+                color: canRecalibrate && !calibrating ? t.accent : t.textGhost,
+                textDecoration: "underline", cursor: canRecalibrate && !calibrating ? "pointer" : "default",
+                opacity: canRecalibrate && !calibrating ? 0.85 : 0.4,
+              }}>
+              {calibrating ? calibrationStep || "Calibrating..." : canRecalibrate
+                ? (lastCalibrated ? "Recalibrate" : "Calibrate Importance")
+                : `Next: ${nextCalibrationDate}`}
+            </button>
+            {lastCalibrated && !calibrating && (
+              <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                (calibrated {new Date(lastCalibrated).toLocaleDateString("en-US", { month: "short", day: "numeric" })})
+              </span>
+            )}
           </div>
           {(() => {
             const W = 800, H = 400;
