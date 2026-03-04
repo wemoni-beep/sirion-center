@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "source": "Sirion Marketing Team Meeting",
+    "date": "2026-02-17",
+    "transcript": "D:\\Download\\Sirion Meeting with marketing team 17-02-2026-transcript.txt",
+    "participants": {
+      "gaurav": "Xtrusio / tool builder",
+      "ron": "Demand & Growth Marketing lead (Speaker 2)",
+      "dj": "Sirion leadership, reports to Ajay (Speaker 4)",
+      "som": "Product Marketing lead — analyst relations, thought leadership (Speaker 5)",
+      "bodhi": "Brand lead (absent) — content design, field marketing, Reddit",
+      "jp": "Gaurav's team (Speaker 3 / Speaker 6)"
+    }
+  },
+
+  "persona_influence": {
+    "source_quote": "The personas that we target generally split between procurement and like in-house legal teams. So, the way I think about the split is sixty thirty or fifty five, thirty five on procurement to legal. And then finance and IT and sales are, you know, heavy influencers in the ten percent range. And folks that have digital transformation is also another big one.",
+    "speaker": "Ron (Demand & Growth lead)",
+    "timestamp": "~00:28:00",
+    "group_splits": {
+      "procurement": { "pct_range": [55, 60], "note": "Primary decision driver" },
+      "legal_inhouse": { "pct_range": [30, 35], "note": "Secondary decision driver" },
+      "finance_it_sales": { "pct_range": [8, 10], "note": "Heavy influencers combined" },
+      "digital_transformation": { "pct": null, "note": "Called out as 'another big one' but unquantified" }
+    },
+    "individual_mapping": {
+      "cpo":  { "influence": 58, "group": "procurement", "rationale": "Top of procurement group, primary buyer persona at Sirion" },
+      "gc":   { "influence": 32, "group": "legal_inhouse", "rationale": "Senior legal, but legal is secondary per Ron's 60/30 split" },
+      "vplo": { "influence": 28, "group": "legal_inhouse", "rationale": "CLM evaluator and champion within legal, under GC authority" },
+      "pd":   { "influence": 22, "group": "procurement", "rationale": "Operational procurement under CPO, project lead for CLM on procurement side" },
+      "cfo":  { "influence": 10, "group": "finance_it_sales", "rationale": "Finance influencer, part of ~10% combined group" },
+      "cio":  { "influence": 8,  "group": "finance_it_sales", "rationale": "IT influencer, veto power on SaaS but not primary driver" },
+      "cto":  { "influence": 6,  "group": "finance_it_sales", "rationale": "Technical gatekeeper, under CIO in CLM buying" },
+      "cm":   { "influence": 5,  "group": "end_user", "rationale": "Operational user, end-user champion or blocker during POC" }
+    }
+  },
+
+  "sales_cycle": {
+    "average_months": 9,
+    "note": "3 quarters average, some shorter some longer depending on deal size",
+    "speaker": "Ron",
+    "timestamp": "~00:29:00"
+  },
+
+  "target_segment": {
+    "segment": "Enterprise only",
+    "source_quote": "these questions can be applied to enterprise personas but more heavily indexed on SMB personas. And SMBs are not somebody we target.",
+    "speaker": "Som (Product Marketing)",
+    "note_from_dj": "Enterprise buyers may NOT qualify searches with 'enterprise' — they may just ask 'which is the best CLM software' without the qualifier"
+  },
+
+  "sirion_positioning": {
+    "founding_dna": "Post-signature, supplier governance",
+    "current_strategy": "Moved narrative away from post-signature ~3 years ago, highlighting pre-sign and full-stack. Recently brought post-signature back slightly.",
+    "dj_quote": "we changed our narrative at least three years ago, where we moved away from post signature, and we started highlighting everything else as well. It's only recently that somebody said okay post signature is such a big strength for us. So we should not completely move away from it.",
+    "perception_scores": {
+      "sirion_visibility": 37,
+      "icertis_visibility": 46,
+      "sirion_content_score": "highest in audit"
+    },
+    "clm_lifecycle": {
+      "post_signature": "Sirion WINS head-to-head, 18/85 URLs reinforce this",
+      "pre_signature": "Content exists but not dominating AI citations",
+      "full_lifecycle": "iCertis dominates"
+    },
+    "partnerships": {
+      "ibm": "Strategic partnership, both product level and GTM level",
+      "oracle": "Stronger partnership than iCertis has with Oracle"
+    }
+  },
+
+  "competitors": {
+    "icertis": {
+      "threat_level": "primary",
+      "strengths": "Full-stack CLM perception, backlinks from Microsoft/IBM/Oracle/Salesforce",
+      "vulnerability": "Content quality is LOWER than Sirion. Authority comes from enterprise tech backlinks not content.",
+      "awareness_stage_gap": "No backlinks or authority found at awareness stage"
+    },
+    "hyperstart_or_similar": {
+      "note": "Created 'a good content bank'"
+    }
+  },
+
+  "content_strategy": {
+    "marketing_structure": {
+      "demand_growth": "Ron leads — performance, pipeline",
+      "brand": "Bodhi leads — content design, field marketing, Reddit",
+      "product_marketing": "Som leads — analyst relations, thought leadership"
+    },
+    "pre_signature_keywords_active": [
+      "automated contract drafting",
+      "AI contract drafting",
+      "contract drafting",
+      "contract generator"
+    ],
+    "ai_citation_insights": {
+      "product_comparisons": "Disproportionately cited by AI even from low-DA sites",
+      "industry_specific_da": "Specific industry domain authority matters more than raw DA score",
+      "nested_questions": "Sequential user questions change what AI cites — Som confirmed this behavior"
+    },
+    "tools_in_use": [
+      { "name": "Profound", "purpose": "AI question tracking, generates hundreds of questions from keywords, tracks ranking" },
+      { "name": "UserGems", "purpose": "Analyzes online info, generates pitches for SDR team" },
+      { "name": "6sense", "purpose": "Intent data and signals" }
+    ],
+    "content_gap": "NOT content quality — Sirion has the highest content score. THE gap is authority/backlinks from high-DA industry-relevant domains."
+  },
+
+  "analyst_data": {
+    "forrester_wave": "Sirion received highest scores in: vision, roadmap, contract review, negotiation execution, contract analysis, obligation management, contract governance",
+    "gartner_reviews": 248,
+    "gartner_note": "Disproportionately praised for post-signature capabilities",
+    "crm_ratings": "Ranked highest in all four use cases: pre-signature, post-signature 4.22, full lifecycle 4.20"
+  },
+
+  "buyer_pain_points": [
+    "How to reduce contract cycle time in enterprise",
+    "CLM adoption is too low",
+    "CLM platforms with fastest implementation time for enterprise",
+    "Contract management AI that legal and procurement teams can actually both use",
+    "No obligation visibility",
+    "Portfolio visibility zero",
+    "Version control issues",
+    "Audit and compliance gaps",
+    "Value erosion / revenue leakage"
+  ],
+
+  "clm_maturity_stages": ["Chaos", "Reactive", "Controlled", "Optimized"],
+
+  "key_accounts": {
+    "bp": "Sirion client (confirmed by DJ)",
+    "general_motors": "Used in outreach demo"
+  },
+
+  "minimum_question_count": {
+    "per_persona": 100,
+    "note": "DJ and Som pushed back on 10-question sample — 'on the basis of ten questions, can we make this conclusion?' — need 100+ for credibility"
+  },
+
+  "clm_advisor_recommendation_rate": {
+    "sirion_pct": "55-65%",
+    "dj_feedback": "Prefers to stop at feature/capability recommendations to maintain credibility, not explicit vendor recommendations"
+  }
+}
