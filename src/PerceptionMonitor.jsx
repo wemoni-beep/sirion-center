@@ -582,7 +582,7 @@ const rThS = (align="left") => ({ padding:"8px 6px", textAlign:align, fontSize:9
 /* ───────────────────────────────────────────────
    CALIBRATION PANEL — Adjustable scoring weights
    ─────────────────────────────────────────────── */
-function CalibrationPanel({ T, Card, Label, Btn, BadgeEl }) {
+function CalibrationPanel({ T, Card, Label, Btn, BadgeEl, onPersist }) {
   const [cal, setCal] = useState(() => loadCalibration());
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -595,6 +595,7 @@ function CalibrationPanel({ T, Card, Label, Btn, BadgeEl }) {
 
   const handleSave = () => {
     saveCalibration(cal);
+    if (onPersist) onPersist(cal);
     setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -603,6 +604,7 @@ function CalibrationPanel({ T, Card, Label, Btn, BadgeEl }) {
   const handleReset = () => {
     setCal({ ...DEFAULT_CALIBRATION });
     saveCalibration(DEFAULT_CALIBRATION);
+    if (onPersist) onPersist(DEFAULT_CALIBRATION);
     setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -717,7 +719,10 @@ const PIPELINE_STATUSES = [
   { id: "published", label: "Published", color: "#22c55e" },
 ];
 
-function loadContentPipeline() {
+function loadContentPipeline(initialData) {
+  // 1. Use pipeline context data if available (canonical source)
+  if (initialData && initialData.length > 0) return initialData;
+  // 2. Legacy fallback: direct localStorage key
   try {
     const raw = localStorage.getItem("xt_content_pipeline");
     if (raw) return JSON.parse(raw);
@@ -728,16 +733,17 @@ function saveContentPipeline(items) {
   try { localStorage.setItem("xt_content_pipeline", JSON.stringify(items)); } catch {}
 }
 
-function ContentPlanningPanel({ T, Card, Label, Btn, Chip, BadgeEl, topGaps, company }) {
-  const [pipeline, setPipeline] = useState(() => loadContentPipeline());
+function ContentPlanningPanel({ T, Card, Label, Btn, Chip, BadgeEl, topGaps, company, initialData, onPersist }) {
+  const [pipeline, setPipeline] = useState(() => loadContentPipeline(initialData));
   const [generating, setGenerating] = useState(null); // gap key being generated
   const [genResults, setGenResults] = useState({}); // gapKey -> titles[]
   const [expandedGap, setExpandedGap] = useState(null);
 
-  // Persist pipeline changes
+  // Persist pipeline changes (localStorage + pipeline context → Firebase)
   const updatePipeline = (newItems) => {
     setPipeline(newItems);
     saveContentPipeline(newItems);
+    if (onPersist) onPersist(newItems);
   };
 
   // Add a gap to the content pipeline
@@ -983,7 +989,6 @@ export default function App() {
   const [fStage, setFS] = useState("All");
   const [fLifecycle, setFL] = useState("All");
   const [hoveredKpi, setHoveredKpi] = useState(null);
-  const [showDetail, setShowDetail] = useState(false);
 
   // Query bank
   const [queries, setQueries] = useState(DEFAULT_QUERIES);
@@ -1298,6 +1303,54 @@ export default function App() {
       });
       return { ...cs, rate: total ? Math.round((m / total) * 100) : 0, count: sr.length };
     });
+  }, [scanData]);
+
+  // personaBk — mention rate per persona (parallels stageBk), sorted weakest first
+  const personaBk = useMemo(() => {
+    if (!scanData) return [];
+    const pMap = {};
+    scanData.results.forEach(r => {
+      const pRaw = r.persona || "Unknown";
+      const pKey = pRaw.toLowerCase();
+      if (!pMap[pKey]) pMap[pKey] = { persona: pRaw.length <= 5 && /^[a-zA-Z]+$/.test(pRaw) ? pRaw.toUpperCase() : pRaw, m: 0, total: 0 };
+      (scanData.llms || []).forEach(lid => {
+        const a = r.analyses[lid];
+        if (a && !a._error) { pMap[pKey].total++; if (a.mentioned) pMap[pKey].m++; }
+      });
+    });
+    return Object.values(pMap).map(p => ({
+      persona: p.persona,
+      rate: p.total ? Math.round((p.m / p.total) * 100) : 0,
+      count: p.total
+    })).sort((a, b) => a.rate - b.rate);
+  }, [scanData]);
+
+  // perceptionMatrix — persona x stage mention rate grid for heatmap
+  const perceptionMatrix = useMemo(() => {
+    if (!scanData) return { personas: [], stages: [], cells: {} };
+    const stageList = ["Awareness", "Discovery", "Consideration"];
+    const normStage = (s) => stageList.find(st => st.toLowerCase() === (s || "").toLowerCase()) || null;
+    const pSet = new Set();
+    const cells = {};
+    scanData.results.forEach(r => {
+      const pRaw = r.persona || "Unknown";
+      const p = pRaw.length <= 5 && /^[a-zA-Z]+$/.test(pRaw) ? pRaw.toUpperCase() : pRaw;
+      const s = normStage(r.stage);
+      if (!s) return;
+      pSet.add(p);
+      const key = `${p}__${s}`;
+      if (!cells[key]) cells[key] = { m: 0, total: 0 };
+      (scanData.llms || []).forEach(lid => {
+        const a = r.analyses[lid];
+        if (a && !a._error) { cells[key].total++; if (a.mentioned) cells[key].m++; }
+      });
+    });
+    const personaList = [...pSet];
+    const activeStages = stageList.filter(s => Object.keys(cells).some(k => k.endsWith(`__${s}`)));
+    Object.keys(cells).forEach(k => {
+      cells[k].rate = cells[k].total ? Math.round((cells[k].m / cells[k].total) * 100) : 0;
+    });
+    return { personas: personaList, stages: activeStages, cells };
   }, [scanData]);
 
   // Narrative Classification — HOW AI frames the company, not just whether it mentions them
@@ -2321,7 +2374,7 @@ export default function App() {
               ) : (
                 <>
 
-                  {/* ═══ SECTION 1: THE GAP ═══ */}
+                  {/* ═══ 1. THE GAP — Original Design ═══ */}
                   <Card style={{ marginBottom: 14, position: "relative", overflow: "hidden", borderLeft: `3px solid ${T.red}` }}>
                     <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: "40%", background: `linear-gradient(90deg, transparent, ${T.red}04)`, pointerEvents: "none" }} />
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
@@ -2371,543 +2424,410 @@ export default function App() {
 
 
 
-                  {/* ═══ SECTION 3: FULL SCAN METRICS ═══ */}
-                  <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.teal}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>
-                          Full Scan: {scanData.results.length} Questions
-                        </div>
-                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>
-                          Scanned across {(scanData?.llms || []).length} LLMs{scanData?.date ? ` on ${new Date(scanData.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
-                        </div>
-                      </div>
-                      <SourceTag lens="scan" />
-                    </div>
+                  {/* ═══ 2. PERCEPTION HEALTH SUMMARY ═══ */}
+                  {(() => {
+                    const company = pipeline.meta?.company || "Sirion";
+                    const totalQ = scanData.results.length;
+                    const totalStatus = countByStatus.winning + countByStatus.competitive + countByStatus.partial + countByStatus.losing;
+                    const compPressure = totalStatus > 0 ? Math.round(((countByStatus.losing + countByStatus.partial) / totalStatus) * 100) : 0;
+                    const weakStage = stageBk.length > 0 ? stageBk[stageBk.length - 1] : null;
+                    const weakPersona = personaBk.length > 0 ? personaBk[0] : null;
 
-                    {/* KPI row */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
-                      {/* Visibility */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${T.teal}06`, border: `1px solid ${T.teal}15` }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <Ring score={sc.overall} size={44} color={T.teal} />
+                    const healthCards = [
+                      {
+                        title: "AI Recognition",
+                        value: `${sc.mention}%`,
+                        interpretation: sc.mention >= 50 ? `${company} appears in most AI responses` : sc.mention >= 20 ? `${company} appears inconsistently` : `${company} is largely invisible to AI`,
+                        status: sc.mention >= 50 ? "strong" : sc.mention >= 20 ? "moderate" : "critical",
+                        action: () => setNav("results"),
+                      },
+                      {
+                        title: "Perception Accuracy",
+                        value: `${sc.sentiment}%`,
+                        interpretation: sc.sentiment >= 60 ? "AI frames you positively when mentioned" : sc.sentiment >= 40 ? "AI tone is neutral, not compelling" : "AI responses carry negative framing",
+                        status: sc.sentiment >= 60 ? "strong" : sc.sentiment >= 40 ? "moderate" : "critical",
+                        action: () => setNav("results"),
+                      },
+                      {
+                        title: "Competitor Pressure",
+                        value: `${compPressure}%`,
+                        interpretation: compPressure <= 30 ? "Competitors rarely outposition you" : compPressure <= 60 ? "Competitors lead in some areas" : "Competitors dominate most queries",
+                        status: compPressure <= 30 ? "strong" : compPressure <= 60 ? "moderate" : "critical",
+                        action: () => setNav("results"),
+                      },
+                      {
+                        title: "Weakest Buying Stage",
+                        value: weakStage ? weakStage.stage : "N/A",
+                        interpretation: weakStage ? `${weakStage.rate}% mention rate, lowest across stages` : "No stage data available",
+                        status: weakStage ? (weakStage.rate >= 50 ? "strong" : weakStage.rate >= 20 ? "moderate" : "critical") : "moderate",
+                        action: () => setNav("results"),
+                      },
+                      {
+                        title: "Weakest Persona",
+                        value: weakPersona ? weakPersona.persona : "N/A",
+                        interpretation: weakPersona ? `${weakPersona.rate}% mention rate, lowest across personas` : "No persona data available",
+                        status: weakPersona ? (weakPersona.rate >= 50 ? "strong" : weakPersona.rate >= 20 ? "moderate" : "critical") : "moderate",
+                        action: () => setNav("results"),
+                      },
+                    ];
+
+                    const statusColor = (s) => s === "strong" ? T.green : s === "moderate" ? T.gold : T.red;
+                    const statusLabel = (s) => s === "strong" ? "Strong" : s === "moderate" ? "Needs Work" : "Critical";
+
+                    return (
+                      <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.teal}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                           <div>
-                            <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>VISIBILITY</div>
-                            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: T.teal }}>{sc.overall}</div>
-                            {deltaScores && <DeltaBadge val={deltaScores.overall} suffix="pts" />}
+                            <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Perception Health</div>
+                            <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Five dimensions of AI perception quality</div>
                           </div>
+                          <SourceTag lens="scan" />
                         </div>
-                      </div>
-                      {/* Mention Rate */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${sc.mention >= 50 ? T.green : sc.mention >= 20 ? T.gold : T.red}06`, border: `1px solid ${sc.mention >= 50 ? T.green : sc.mention >= 20 ? T.gold : T.red}15` }}>
-                        <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>SHOWING UP?</div>
-                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: sc.mention >= 50 ? T.green : sc.mention >= 20 ? T.gold : T.red }}>
-                          {sc.mention >= 50 ? "YES" : sc.mention >= 20 ? "PARTIAL" : "NO"}
-                        </div>
-                        <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontM }}>{sc.mention}%{deltaScores ? ` (${deltaScores.mention >= 0 ? "+" : ""}${deltaScores.mention})` : ""}</div>
-                        <PBar value={sc.mention} color={sc.mention >= 50 ? T.green : sc.mention >= 20 ? T.gold : T.red} h={3} />
-                      </div>
-                      {/* Avg Rank */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${avgRank && avgRank <= 2 ? T.green : avgRank && avgRank <= 4 ? T.gold : T.red}06`, border: `1px solid ${avgRank && avgRank <= 2 ? T.green : avgRank && avgRank <= 4 ? T.gold : T.red}15` }}>
-                        <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>AVG RANK</div>
-                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: avgRank && avgRank <= 2 ? T.green : avgRank && avgRank <= 4 ? T.gold : T.red }}>
-                          {avgRank ? `#${avgRank}` : "N/A"}
-                        </div>
-                        <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontM }}>{avgRank ? (avgRank <= 2 ? "Top tier" : avgRank <= 4 ? "Mid tier" : "Low tier") : "Not ranked"}</div>
-                      </div>
-                      {/* Share of Voice */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${shareOfVoice >= 20 ? T.green : shareOfVoice >= 10 ? T.gold : T.red}06`, border: `1px solid ${shareOfVoice >= 20 ? T.green : shareOfVoice >= 10 ? T.gold : T.red}15` }}>
-                        <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>SHARE OF VOICE</div>
-                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: shareOfVoice >= 20 ? T.green : shareOfVoice >= 10 ? T.gold : T.red }}>
-                          {shareOfVoice}%
-                        </div>
-                        <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontM }}>of all mentions{deltaScores?.shareOfVoice ? ` (${deltaScores.shareOfVoice >= 0 ? "+" : ""}${deltaScores.shareOfVoice})` : ""}</div>
-                      </div>
-                      {/* Sentiment */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${sc.sentiment >= 60 ? T.green : sc.sentiment >= 40 ? T.gold : T.red}06`, border: `1px solid ${sc.sentiment >= 60 ? T.green : sc.sentiment >= 40 ? T.gold : T.red}15` }}>
-                        <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>AI TONE</div>
-                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: sc.sentiment >= 60 ? T.green : sc.sentiment >= 40 ? T.gold : T.red }}>
-                          {sc.sentiment >= 60 ? "Positive" : sc.sentiment >= 40 ? "Neutral" : "Negative"}
-                        </div>
-                        <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontM }}>{sc.sentiment}%</div>
-                      </div>
-                    </div>
-
-                    {/* Per-LLM bars */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
-                      {(scanData.llms || []).map(lid => {
-                        const llmM = scanData.results.filter(r => r.analyses[lid]?.mentioned).length;
-                        const llmT = scanData.results.filter(r => r.analyses[lid] && !r.analyses[lid]._error).length;
-                        const pct = llmT ? Math.round((llmM / llmT) * 100) : 0;
-                        return (
-                          <div key={lid} style={{ padding: "6px 8px", borderRadius: 6, background: `rgba(255,255,255,0.015)`, border: `1px solid ${T.border}` }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                <div style={{ width: 5, height: 5, borderRadius: "50%", background: LLM_META[lid]?.color }} />
-                                <span style={{ fontSize: 10, fontWeight: 600, color: LLM_META[lid]?.color }}>{LLM_META[lid]?.name}</span>
-                              </div>
-                              <span style={{ fontSize: 10, fontFamily: T.fontM, color: T.dim }}>{pct}%</span>
-                            </div>
-                            <PBar value={pct} color={LLM_META[lid]?.color} h={3} />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </Card>
-
-
-                  {/* ═══ SECTION 4: COMPETITIVE MAP ═══ */}
-                  <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.gold}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Competitive Map</div>
-                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Who owns what territory in AI's mind</div>
-                      </div>
-                      <SourceTag lens="scan" />
-                    </div>
-
-                    {/* Dendrogram */}
-                    <div style={{ margin: "4px 0 14px", borderRadius: 8, overflow: "hidden", background: T.surface, border: `1px solid ${T.border}` }}>
-                      <CompetitorDendrogram data={DENDROGRAM_DATA} dynamicFeatures={compFeatures} />
-                    </div>
-
-                    {/* Competitor cards */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-                      {compMentions.slice(0, 5).map((c2, i) => {
-                        const cColor = VENDOR_COLORS[c2.name] || T.dim;
-                        const isSirion = c2.name.toLowerCase().includes("sirion");
-                        return (
-                          <div key={c2.name} style={{ padding: "10px 12px", borderRadius: 8, background: isSirion ? `${T.teal}06` : "rgba(255,255,255,0.015)", border: `1px solid ${isSirion ? T.teal + "30" : T.border}`, borderTop: `2px solid ${cColor}` }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                              <span style={{ fontSize: 12, fontWeight: 700, color: cColor, fontFamily: T.fontH }}>{c2.name}</span>
-                              <BadgeEl text={"#" + (i + 1)} color={i === 0 ? T.gold : i < 3 ? T.blue : T.dim} />
-                            </div>
-                            <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontM }}>{c2.m} mentions {"\u00B7"} {c2.t3} top-3</div>
-                            {compFeatures?.[c2.name] && (
-                              <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 6 }}>
-                                {Object.entries(compFeatures[c2.name]).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([feat]) => (
-                                  <span key={feat} style={{ padding: "1px 6px", borderRadius: 3, fontSize: 8, fontFamily: T.fontM, background: `${cColor}10`, color: cColor, border: `1px solid ${cColor}18` }}>{feat}</span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </Card>
-
-
-                  {/* ═══ SECTION 5: TREND ═══ */}
-                  <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.blue}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Trend</div>
-                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Month-over-month changes + question bank growth</div>
-                      </div>
-                      <SourceTag lens="scan" />
-                    </div>
-
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
-                      {/* Delta cards */}
-                      {deltaScores ? (
-                        <>
-                          {[
-                            { label: "Visibility", val: deltaScores.overall, suffix: "pts", color: T.teal },
-                            { label: "Mention Rate", val: deltaScores.mention, suffix: "%", color: T.blue },
-                            { label: "Sentiment", val: deltaScores.sentiment, suffix: "%", color: T.green },
-                            { label: "Share of Voice", val: deltaScores.shareOfVoice || 0, suffix: "%", color: T.purple },
-                          ].map(d => (
-                            <div key={d.label} style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.015)", border: `1px solid ${T.border}`, textAlign: "center" }}>
-                              <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8, marginBottom: 4 }}>{d.label}</div>
-                              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.fontH, color: d.val > 0 ? T.green : d.val < 0 ? T.red : T.dim }}>
-                                {d.val > 0 ? "+" : ""}{d.val}{d.suffix}
-                              </div>
-                            </div>
-                          ))}
-                        </>
-                      ) : (
-                        <div style={{ gridColumn: "1 / -1", padding: "16px 0", textAlign: "center", fontSize: 11, color: T.dim }}>
-                          Run a second scan to see trend data
-                        </div>
-                      )}
-                      {/* Question Bank Growth */}
-                      <div style={{ padding: "10px 12px", borderRadius: 8, background: `${T.teal}06`, border: `1px solid ${T.teal}15`, textAlign: "center" }}>
-                        <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8, marginBottom: 4 }}>QUESTION BANK</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.fontH, color: T.teal }}>{queries.length}</div>
-                        <div style={{ fontSize: 9, color: T.dim }}>questions tracked</div>
-                      </div>
-                    </div>
-
-                    {prevScan && (
-                      <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 6, background: `${T.teal}08`, border: `1px solid ${T.teal}15`, fontSize: 10, color: T.muted }}>
-                        Comparing vs {new Date(prevScan.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} ({prevScan.count} queries)
-                      </div>
-                    )}
-                  </Card>
-
-
-                  {/* ═══ SECTION 6: COMBINED INTELLIGENCE DASHBOARD ═══ */}
-                  <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.teal}` }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Combined Intelligence</div>
-                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Client + competitor presence across all LLMs per question</div>
-                      </div>
-                      <SourceTag lens="scan" />
-                    </div>
-
-                    {/* Table */}
-                    {(() => {
-                      const llmIds = scanData.llms || ["openai", "gemini", "claude"];
-                      const llmLabels = { openai: "GPT", gemini: "GEM", claude: "CLD" };
-                      // Top scanned questions
-                      const displayResults = (scanData.results || []).slice(0, 15);
-                      if (displayResults.length === 0) return <div style={{ fontSize: 11, color: T.dim, padding: 12 }}>No scan results available</div>;
-
-                      return (
-                        <div style={{ borderRadius: 6, overflow: "hidden", border: `1px solid ${T.border}` }}>
-                          {/* Header */}
-                          <div style={{
-                            display: "grid", gridTemplateColumns: "1fr 100px 90px 130px 70px",
-                            padding: "6px 10px", background: T.surface,
-                            fontSize: 8, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 1,
-                          }}>
-                            <span>Question</span>
-                            <span style={{ textAlign: "center" }}>Client Present</span>
-                            <span style={{ textAlign: "center" }}>Client Rank</span>
-                            <span style={{ textAlign: "center" }}>Top Competitor</span>
-                            <span style={{ textAlign: "center" }}>Sentiment</span>
-                          </div>
-
-                          {/* Rows */}
-                          {displayResults.map((r, idx) => {
-                            // Compute per-LLM data
-                            const llmData = llmIds.map(lid => {
-                              const a = r.analyses?.[lid];
-                              if (!a || a._error) return { lid, mentioned: false, rank: null, sentiment: null };
-                              return { lid, mentioned: !!a.mentioned, rank: a.rank || null, sentiment: a.sentiment || null };
-                            });
-                            const anyPresent = llmData.some(d => d.mentioned);
-                            const bestRank = llmData.filter(d => d.rank).sort((a, b) => a.rank - b.rank)[0]?.rank || null;
-
-                            // Top competitor
-                            const compCounts = {};
-                            llmIds.forEach(lid => {
-                              const a = r.analyses?.[lid];
-                              (a?.vendors_mentioned || []).forEach(v => {
-                                if (!/sirion/i.test(v.name)) compCounts[v.name] = (compCounts[v.name] || 0) + 1;
-                              });
-                            });
-                            const topComp = Object.entries(compCounts).sort((a, b) => b[1] - a[1])[0];
-                            // Top comp rank
-                            let topCompRank = null;
-                            if (topComp) {
-                              for (const lid of llmIds) {
-                                const vm = r.analyses?.[lid]?.vendors_mentioned || [];
-                                const found = vm.find(v => v.name === topComp[0]);
-                                if (found?.rank) { topCompRank = found.rank; break; }
-                              }
-                            }
-
-                            // Avg sentiment
-                            const sentiments = llmData.filter(d => d.sentiment).map(d => d.sentiment);
-                            const avgSent = sentiments.length > 0 ? sentiments.reduce((s, v) => s + (v === "positive" ? 1 : v === "negative" ? -1 : 0), 0) / sentiments.length : 0;
-                            const sentLabel = avgSent > 0.3 ? "Positive" : avgSent < -0.3 ? "Negative" : "Neutral";
-                            const sentColor = avgSent > 0.3 ? T.green : avgSent < -0.3 ? T.red : T.gold;
-
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(195px, 1fr))", gap: 10 }}>
+                          {healthCards.map(card => {
+                            const col = statusColor(card.status);
                             return (
-                              <div key={r.qid || idx} style={{
-                                display: "grid", gridTemplateColumns: "1fr 100px 90px 130px 70px",
-                                padding: "6px 10px", alignItems: "center",
-                                borderTop: `1px solid ${T.border}`,
-                                background: idx % 2 === 0 ? "transparent" : `${T.surface}60`,
-                              }}>
-                                {/* Question */}
-                                <span style={{ fontSize: 9, color: T.text, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={r.query}>
-                                  <span style={{ color: T.dim, marginRight: 4 }}>{idx + 1}.</span>
-                                  {r.query}
-                                </span>
-
-                                {/* Client Present - per LLM dots */}
-                                <div style={{ display: "flex", justifyContent: "center", gap: 4 }}>
-                                  {llmData.map(d => (
-                                    <div key={d.lid} title={`${llmLabels[d.lid]}: ${d.mentioned ? "Present" : "Absent"}`} style={{
-                                      width: 18, height: 18, borderRadius: "50%", fontSize: 9, fontWeight: 700,
-                                      display: "flex", alignItems: "center", justifyContent: "center",
-                                      background: d.mentioned ? `${T.green}20` : `${T.red}15`,
-                                      color: d.mentioned ? T.green : T.red,
-                                      border: `1px solid ${d.mentioned ? T.green : T.red}30`,
-                                    }}>
-                                      {d.mentioned ? "\u2713" : "\u2717"}
-                                    </div>
-                                  ))}
+                              <div
+                                key={card.title}
+                                onClick={card.action}
+                                style={{
+                                  padding: "12px 14px", borderRadius: 8, cursor: "pointer",
+                                  background: `${col}06`, border: `1px solid ${col}18`,
+                                  transition: "all 0.2s ease",
+                                }}
+                                onMouseEnter={e => { e.currentTarget.style.background = `${col}12`; e.currentTarget.style.borderColor = `${col}30`; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = `${col}06`; e.currentTarget.style.borderColor = `${col}18`; }}
+                              >
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                  <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8 }}>{card.title}</div>
+                                  <span style={{ fontSize: 7, fontWeight: 700, fontFamily: T.fontM, padding: "1px 5px", borderRadius: 3, background: `${col}15`, color: col, textTransform: "uppercase", letterSpacing: 0.5 }}>{statusLabel(card.status)}</span>
                                 </div>
-
-                                {/* Client Rank - per LLM */}
-                                <div style={{ display: "flex", justifyContent: "center", gap: 3 }}>
-                                  {llmData.map(d => (
-                                    <span key={d.lid} style={{
-                                      fontSize: 9, fontWeight: 700, fontFamily: T.fontM,
-                                      color: d.rank ? (d.rank <= 2 ? T.green : d.rank <= 4 ? T.gold : T.red) : T.dim,
-                                      minWidth: 20, textAlign: "center",
-                                    }}>
-                                      {d.rank ? `#${d.rank}` : "--"}
-                                    </span>
-                                  ))}
-                                </div>
-
-                                {/* Top Competitor */}
-                                <div style={{ textAlign: "center" }}>
-                                  {topComp ? (
-                                    <span style={{ fontSize: 9, fontFamily: T.fontM }}>
-                                      <span style={{ color: VENDOR_COLORS[topComp[0]] || T.muted, fontWeight: 700 }}>{topComp[0].length > 12 ? topComp[0].substring(0, 11) + ".." : topComp[0]}</span>
-                                      {topCompRank && <span style={{ color: T.dim, marginLeft: 3 }}>#{topCompRank}</span>}
-                                    </span>
-                                  ) : (
-                                    <span style={{ fontSize: 9, color: T.dim }}>--</span>
-                                  )}
-                                </div>
-
-                                {/* Sentiment */}
-                                <div style={{ textAlign: "center" }}>
-                                  <span style={{ fontSize: 8, fontWeight: 700, fontFamily: T.fontM, padding: "2px 6px", borderRadius: 3, background: `${sentColor}12`, color: sentColor }}>
-                                    {sentLabel}
-                                  </span>
-                                </div>
+                                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: T.fontH, color: col, marginBottom: 4 }}>{card.value}</div>
+                                <div style={{ fontSize: 10, color: T.muted, lineHeight: 1.4 }}>{card.interpretation}</div>
                               </div>
                             );
                           })}
                         </div>
-                      );
-                    })()}
+                      </Card>
+                    );
+                  })()}
 
-                    {/* Go to Reports button */}
-                    <div style={{ textAlign: "center", marginTop: 14 }}>
-                      <button
-                        onClick={() => setNav("report")}
-                        style={{
-                          padding: "8px 24px", borderRadius: 6, border: `1px solid ${T.teal}40`,
-                          background: `${T.teal}12`, color: T.teal, fontSize: 11, fontWeight: 700,
-                          fontFamily: T.fontM, cursor: "pointer", letterSpacing: 0.5,
-                          transition: "all 0.2s ease",
-                        }}
-                        onMouseEnter={e => { e.target.style.background = `${T.teal}25`; }}
-                        onMouseLeave={e => { e.target.style.background = `${T.teal}12`; }}
-                      >
-                        Go to Reports for Full Analysis {"\u2192"}
-                      </button>
-                      <div style={{ fontSize: 9, color: T.dim, marginTop: 6 }}>
-                        Drill down into per-query details, API responses, and competitor breakdowns
+
+                  {/* ═══ 3. WHERE THE GAP LIVES ═══ */}
+                  {perceptionMatrix.personas.length > 0 && perceptionMatrix.stages.length > 0 && (
+                    <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.purple}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Where the Gap Lives</div>
+                          <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Perception strength by persona and buying stage</div>
+                        </div>
+                        <SourceTag lens="scan" />
                       </div>
-                    </div>
-                  </Card>
-
-
-                  {/* ═══ COLLAPSIBLE DETAILED METRICS ═══ */}
-                  <div
-                    onClick={() => setShowDetail(!showDetail)}
-                    style={{ padding: "8px 14px", borderRadius: 8, background: T.surface, border: `1px solid ${T.border}`, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showDetail ? 12 : 0, userSelect: "none" }}
-                  >
-                    <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, fontFamily: T.fontM }}>
-                      {showDetail ? "Hide" : "Show"} Detailed Metrics
-                    </span>
-                    <span style={{ fontSize: 12, color: T.dim, transform: showDetail ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>{"\u25BC"}</span>
-                  </div>
-
-                  {showDetail && (
-                    <>
-                      {/* Per-LLM Presence */}
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 12, animation: "fadeUp 0.25s ease" }}>
-                        <Card>
-                          <Label>SIRION AI PRESENCE</Label>
-                          <div style={{ marginTop: 4 }}>
-                            {(scanData.llms || []).map(lid => {
-                              const llmMentions = scanData.results.filter(r => r.analyses[lid]?.mentioned).length;
-                              const llmTotal = scanData.results.filter(r => r.analyses[lid] && !r.analyses[lid]._error).length;
-                              const pct = llmTotal ? Math.round((llmMentions / llmTotal) * 100) : 0;
-                              return (
-                                <div key={lid} style={{ marginBottom: 14 }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: LLM_META[lid]?.color }} />
-                                      <span style={{ fontSize: 11, fontWeight: 600, color: LLM_META[lid]?.color }}>{LLM_META[lid]?.name}</span>
-                                    </div>
-                                    <span style={{ fontSize: 13, fontWeight: 800, fontFamily: T.fontH, color: pct >= 50 ? T.green : pct > 0 ? T.gold : T.red }}>{llmMentions}/{llmTotal}</span>
-                                  </div>
-                                  <PBar value={pct} color={pct >= 50 ? T.green : pct > 0 ? T.gold : T.red} h={4} />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </Card>
-                        <Card>
-                          <Label>MENTION BY STAGE</Label>
-                          {stageBk.map(s => (
-                            <div key={s.stage} style={{ marginBottom: 14 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><Chip text={s.stage} color={stageColor(s.stage)} /><span style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: stageColor(s.stage) }}>{s.rate}%</span></div>
-                              <PBar value={s.rate} color={stageColor(s.stage)} h={5} />
-                            </div>
-                          ))}
-                        </Card>
-                        <Card>
-                          <Label>MENTION BY CLM STAGE</Label>
-                          {clmStageBk.map(s => (
-                            <div key={s.id} style={{ marginBottom: 14 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                                <Chip text={s.label} color={s.color} />
-                                <span style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: s.color }}>{s.rate}%</span>
-                              </div>
-                              <PBar value={s.rate} color={s.color} h={5} />
-                              <div style={{ fontSize: 9, color: T.dim, marginTop: 2 }}>{s.count} questions</div>
-                            </div>
-                          ))}
-                        </Card>
-                        <Card>
-                          <Label>AI DIFFICULTY DISTRIBUTION</Label>
-                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            {[{ l: "Easy", v: diffDist.easy, c: T.green }, { l: "Moderate", v: diffDist.mod, c: T.gold }, { l: "Hard", v: diffDist.hard, c: T.red }].map(d => (
-                              <div key={d.l} style={{ flex: 1, textAlign: "center", padding: "12px 8px", borderRadius: 8, background: "rgba(255,255,255,0.015)", border: `1px solid ${d.c}20` }}>
-                                <div style={{ fontSize: 22, fontWeight: 800, fontFamily: T.fontH, color: d.c }}>{d.v}</div>
-                                <div style={{ fontSize: 11, color: T.dim, fontFamily: T.fontM, marginTop: 2 }}>{d.l}</div>
-                              </div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: T.fontM }}>
+                          <thead>
+                            <tr>
+                              <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 8, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${T.border}` }}>Persona</th>
+                              {perceptionMatrix.stages.map(s => (
+                                <th key={s} style={{ padding: "6px 10px", textAlign: "center", fontSize: 8, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${T.border}`, minWidth: 80 }}>{s}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {perceptionMatrix.personas.map(p => (
+                              <tr key={p}>
+                                <td style={{ padding: "8px 10px", fontSize: 10, fontWeight: 600, color: T.text, borderBottom: `1px solid ${T.border}40`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 150 }} title={p}>{p}</td>
+                                {perceptionMatrix.stages.map(s => {
+                                  const cell = perceptionMatrix.cells[`${p}__${s}`];
+                                  const rate = cell?.rate ?? 0;
+                                  const cellColor = rate >= 50 ? T.green : rate >= 20 ? T.gold : T.red;
+                                  return (
+                                    <td key={s} style={{ padding: "6px 10px", textAlign: "center", borderBottom: `1px solid ${T.border}40` }}>
+                                      {cell?.total > 0 ? (
+                                        <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 44, padding: "4px 8px", borderRadius: 4, background: `${cellColor}12`, border: `1px solid ${cellColor}20` }}>
+                                          <span style={{ fontSize: 12, fontWeight: 800, fontFamily: T.fontH, color: cellColor }}>{rate}%</span>
+                                        </div>
+                                      ) : (
+                                        <span style={{ color: T.dim, fontSize: 9 }}>--</span>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
                             ))}
-                          </div>
-                        </Card>
+                          </tbody>
+                        </table>
                       </div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 12, alignItems: "center", justifyContent: "flex-end" }}>
+                        {[{ label: "Strong", color: T.green }, { label: "Partial", color: T.gold }, { label: "Weak", color: T.red }].map(l => (
+                          <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <div style={{ width: 8, height: 8, borderRadius: 2, background: `${l.color}30`, border: `1px solid ${l.color}40` }} />
+                            <span style={{ fontSize: 9, color: T.dim }}>{l.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  )}
 
-                      {/* Competitor Leaderboard */}
-                      <Card style={{ marginBottom: 12 }}>
-                        <Label>COMPETITOR AI VISIBILITY LEADERBOARD</Label>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 8 }}>
-                          {compMentions.slice(0, 10).map((c2, i) => (
-                            <div key={c2.name} style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.015)", border: `1px solid ${i === 0 ? T.gold + "35" : T.border}` }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
-                                <span style={{ fontSize: 11, fontWeight: 600, color: VENDOR_COLORS[c2.name] || T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }} title={c2.name}>{c2.name}</span>
-                                <BadgeEl text={"#" + (i + 1)} color={i === 0 ? T.gold : i < 3 ? T.blue : T.dim} />
+
+                  {/* ═══ 4. NARRATIVE OWNERSHIP ═══ */}
+                  {(() => {
+                    const company = (pipeline.meta?.company || "Sirion").toLowerCase();
+                    // Build themes from question clusters — which competitor dominates each topic cluster
+                    const clusterMap = {};
+                    scanData.results.forEach(r => {
+                      const meta = getQMeta(r.qid);
+                      const cluster = meta.cluster || meta.cw || r.lifecycle || "General";
+                      if (!clusterMap[cluster]) clusterMap[cluster] = { theme: cluster, vendors: {} };
+                      (scanData.llms || []).forEach(lid => {
+                        const a = r.analyses[lid];
+                        if (!a || a._error) return;
+                        (a.vendors_mentioned || []).forEach(v => {
+                          clusterMap[cluster].vendors[v.name] = (clusterMap[cluster].vendors[v.name] || 0) + 1;
+                        });
+                      });
+                    });
+                    const themes = Object.values(clusterMap)
+                      .map(t => {
+                        const sorted = Object.entries(t.vendors).sort((a, b) => b[1] - a[1]);
+                        const owner = sorted[0] || ["-", 0];
+                        const sirionEntry = sorted.find(([v]) => v.toLowerCase().includes(company));
+                        const sirionCount = sirionEntry ? sirionEntry[1] : 0;
+                        const ownerIsSirion = owner[0].toLowerCase().includes(company);
+                        const totalMentions = sorted.reduce((s, [, c]) => s + c, 0);
+                        let strategy = "Attack";
+                        let stratColor = T.gold;
+                        if (ownerIsSirion) { strategy = "Defend"; stratColor = T.green; }
+                        else if (sirionCount > 0 && sirionCount >= owner[1] * 0.6) { strategy = "Compete"; stratColor = T.blue; }
+                        else if (totalMentions <= 2) { strategy = "Ignore"; stratColor = T.dim; }
+                        return { ...t, owner: owner[0], ownerCount: owner[1], sirionCount, totalMentions, strategy, stratColor, ownerIsSirion };
+                      })
+                      .sort((a, b) => b.totalMentions - a.totalMentions)
+                      .slice(0, 7);
+
+                    if (themes.length === 0) return null;
+
+                    return (
+                      <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.gold}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Narrative Ownership</div>
+                            <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Which competitor owns each theme in AI responses</div>
+                          </div>
+                          <SourceTag lens="scan" />
+                        </div>
+                        <div style={{ borderRadius: 6, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                          {/* Header */}
+                          <div style={{
+                            display: "grid", gridTemplateColumns: "1fr 100px 80px 60px 70px",
+                            padding: "6px 10px", background: T.surface,
+                            fontSize: 8, fontFamily: T.fontM, color: T.dim, textTransform: "uppercase", letterSpacing: 0.8,
+                          }}>
+                            <span>Theme</span>
+                            <span style={{ textAlign: "center" }}>Owner</span>
+                            <span style={{ textAlign: "center" }}>{pipeline.meta?.company || "Sirion"}</span>
+                            <span style={{ textAlign: "center" }}>Weight</span>
+                            <span style={{ textAlign: "center" }}>Action</span>
+                          </div>
+                          {/* Rows */}
+                          {themes.map((t, idx) => (
+                            <div key={t.theme} style={{
+                              display: "grid", gridTemplateColumns: "1fr 100px 80px 60px 70px",
+                              padding: "7px 10px", alignItems: "center",
+                              borderTop: `1px solid ${T.border}`,
+                              background: idx % 2 === 0 ? "transparent" : `${T.surface}60`,
+                            }}>
+                              <span style={{ fontSize: 10, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={t.theme}>{t.theme}</span>
+                              <div style={{ textAlign: "center" }}>
+                                <span style={{ fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: VENDOR_COLORS[t.owner] || T.muted }}>{t.owner.length > 12 ? t.owner.substring(0, 11) + ".." : t.owner}</span>
+                                <span style={{ fontSize: 8, color: T.dim, marginLeft: 3 }}>({t.ownerCount}x)</span>
                               </div>
-                              <div style={{ fontSize: 11, color: T.dim, fontFamily: T.fontM, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c2.m} mentions {"\u00B7"} {c2.t3} top3 {"\u00B7"} {c2.pos} positive</div>
+                              <div style={{ textAlign: "center" }}>
+                                {t.sirionCount > 0 ? (
+                                  <span style={{ fontSize: 10, fontWeight: 700, fontFamily: T.fontM, color: t.ownerIsSirion ? T.green : T.teal }}>{t.sirionCount}x</span>
+                                ) : (
+                                  <span style={{ fontSize: 9, fontWeight: 600, color: T.red }}>Absent</span>
+                                )}
+                              </div>
+                              <div style={{ textAlign: "center" }}>
+                                <span style={{ fontSize: 9, fontFamily: T.fontM, color: T.dim }}>{t.totalMentions}</span>
+                              </div>
+                              <div style={{ textAlign: "center" }}>
+                                <span style={{ fontSize: 8, fontWeight: 700, fontFamily: T.fontM, padding: "2px 6px", borderRadius: 3, background: `${t.stratColor}12`, color: t.stratColor, textTransform: "uppercase", letterSpacing: 0.3 }}>{t.strategy}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ marginTop: 8, display: "flex", gap: 12, alignItems: "center", justifyContent: "flex-end" }}>
+                          {[{ label: "Defend", color: T.green }, { label: "Compete", color: T.blue }, { label: "Attack", color: T.gold }, { label: "Ignore", color: T.dim }].map(l => (
+                            <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: 2, background: `${l.color}25` }} />
+                              <span style={{ fontSize: 9, color: T.dim }}>{l.label}</span>
                             </div>
                           ))}
                         </div>
                       </Card>
+                    );
+                  })()}
 
-                      {/* Competitor Frequency Chart */}
-                      {compMentions.length > 0 && (
-                        <Card style={{ marginBottom: 12 }}>
-                          <Label>COMPETITOR MENTION FREQUENCY</Label>
-                          <div style={{ fontSize: 11, color: T.dim, marginBottom: 8 }}>How often each vendor is mentioned across all {scanData.results.length} queries and {scanData.llms.length} LLMs</div>
-                          <ResponsiveContainer width="100%" height={Math.max(180, compMentions.slice(0, 10).length * 28)}>
-                            <BarChart data={compMentions.slice(0, 10)} layout="vertical" margin={{ left: 100, right: 20 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
-                              <XAxis type="number" tick={{ fill: T.dim, fontSize: 11 }} />
-                              <YAxis dataKey="name" type="category" tick={{ fill: T.muted, fontSize: 11 }} width={95} />
-                              <Tooltip contentStyle={TIP_STYLE()} />
-                              <Bar dataKey="m" name="Mentions" radius={[0, 3, 3, 0]}>
-                                {compMentions.slice(0, 10).map((c2, i) => <Cell key={i} fill={VENDOR_COLORS[c2.name] || T.dim} fillOpacity={c2.name.toLowerCase().includes("sirion") ? 1 : 0.55} />)}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </Card>
-                      )}
 
-                      {/* Citation Sources */}
-                      {citationSources.length > 0 && (
-                        <Card style={{ marginBottom: 12 }}>
-                          <Label>CITATION SOURCES</Label>
-                          <div style={{ fontSize: 11, color: T.dim, marginBottom: 10 }}>Sources AI platforms reference when discussing vendors in this space</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
-                            {citationSources.slice(0, 12).map((src, i) => {
-                              const typeColor = { analyst: T.purple, review: T.gold, vendor: T.blue, news: T.green, community: T.orange, academic: T.cyan, other: T.dim }[src.type] || T.dim;
+                  {/* ═══ 5. TREND SIGNAL ═══ */}
+                  <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.blue}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Trend Signal</div>
+                        <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>Directional movement since last scan</div>
+                      </div>
+                      <SourceTag lens="scan" />
+                    </div>
+
+                    {(() => {
+                      if (!deltaScores || !prevScan) {
+                        return (
+                          <div style={{ padding: "16px 0", textAlign: "center", fontSize: 11, color: T.dim, lineHeight: 1.6 }}>
+                            Run a second scan to track perception trends over time
+                          </div>
+                        );
+                      }
+                      // Scope validation: same LLM count and comparable question count
+                      const prevCount = prevScan.results?.length || prevScan.count || 0;
+                      const curCount = scanData.results.length;
+                      const prevLlms = prevScan.llms?.length || 0;
+                      const curLlms = (scanData.llms || []).length;
+                      const scopeMatch = prevLlms === curLlms && Math.abs(curCount - prevCount) <= Math.max(curCount, prevCount) * 0.3;
+
+                      if (!scopeMatch) {
+                        return (
+                          <div style={{ padding: "12px 14px", borderRadius: 6, background: `${T.gold}08`, border: `1px solid ${T.gold}18`, fontSize: 10, color: T.muted, lineHeight: 1.6 }}>
+                            <span style={{ fontWeight: 700, color: T.gold }}>Trend unavailable.</span> Scan scope has changed (previous: {prevCount} questions / {prevLlms} models, current: {curCount} questions / {curLlms} models). Run scans with matching scope to enable comparison.
+                          </div>
+                        );
+                      }
+
+                      const trendItems = [
+                        { label: "Visibility", val: deltaScores.overall, suffix: "pts" },
+                        { label: "Mention Rate", val: deltaScores.mention, suffix: "%" },
+                        { label: "Sentiment", val: deltaScores.sentiment, suffix: "%" },
+                        { label: "Share of Voice", val: deltaScores.shareOfVoice || 0, suffix: "%" },
+                      ];
+                      const dirLabel = (v) => v > 2 ? "Improving" : v < -2 ? "Declining" : "Stable";
+                      const dirColor = (v) => v > 2 ? T.green : v < -2 ? T.red : T.dim;
+                      const dirArrow = (v) => v > 2 ? "\u2191" : v < -2 ? "\u2193" : "\u2192";
+
+                      return (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+                            {trendItems.map(d => (
+                              <div key={d.label} style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.015)", border: `1px solid ${T.border}` }}>
+                                <div style={{ fontSize: 8, color: T.dim, textTransform: "uppercase", fontFamily: T.fontM, letterSpacing: 0.8, marginBottom: 4 }}>{d.label}</div>
+                                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                                  <span style={{ fontSize: 18, fontWeight: 800, fontFamily: T.fontH, color: dirColor(d.val) }}>{dirArrow(d.val)}</span>
+                                  <span style={{ fontSize: 12, fontWeight: 700, fontFamily: T.fontM, color: dirColor(d.val) }}>{dirLabel(d.val)}</span>
+                                </div>
+                                <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontM, marginTop: 3 }}>{d.val > 0 ? "+" : ""}{d.val}{d.suffix}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 6, background: `${T.blue}08`, border: `1px solid ${T.blue}15`, fontSize: 10, color: T.muted }}>
+                            vs {new Date(prevScan.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} ({prevCount} questions, {prevLlms} models)
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </Card>
+
+
+                  {/* ═══ 6. RECOMMENDED PRIORITY ACTIONS ═══ */}
+                  {competitorInsights && (competitorInsights.topActions.length > 0 || competitorInsights.losing.length > 0) && (
+                    <Card style={{ marginBottom: 14, borderLeft: `3px solid ${T.gold}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 800, fontFamily: T.fontH, color: T.text }}>Priority Actions</div>
+                          <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>What to fix next based on gap and competitive analysis</div>
+                        </div>
+                        <SourceTag lens="scan" />
+                      </div>
+
+                      {/* Content Gaps */}
+                      {competitorInsights.topActions.length > 0 && (
+                        <div style={{ marginBottom: competitorInsights.losing.length > 0 ? 14 : 0 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.gold, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Content Gaps</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {competitorInsights.topActions.map(([topic, freq], i) => {
+                              const severity = freq >= 5 ? "High" : freq >= 3 ? "Medium" : "Low";
+                              const sevColor = freq >= 5 ? T.red : freq >= 3 ? T.gold : T.dim;
                               return (
-                                <div key={i} style={{ padding: "8px 10px", borderRadius: 6, background: "rgba(255,255,255,0.015)", border: `1px solid ${T.border}`, minWidth: 0 }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 6 }}>
-                                    <span style={{ fontSize: 11, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }} title={src.domain}>{src.domain}</span>
-                                    <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                                      <BadgeEl text={src.type} color={typeColor} />
-                                      <span style={{ fontSize: 10, fontFamily: T.fontM, color: T.dim }}>{src.count}x</span>
-                                    </div>
+                                <div key={topic} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6, background: "rgba(255,255,255,0.015)", border: `1px solid ${T.border}` }}>
+                                  <div style={{ width: 20, height: 20, borderRadius: "50%", background: `${T.gold}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: T.gold, fontFamily: T.fontH, flexShrink: 0 }}>{i + 1}</div>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 11, color: T.text, fontWeight: 600, lineHeight: 1.4 }}>{topic}</div>
+                                    <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontM, marginTop: 2 }}>AI flagged this gap in {freq} responses. {severity === "High" ? "Multiple models agree this is missing." : "Appears across some responses."}</div>
                                   </div>
-                                  <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                                    {src.llms.map(lid => <div key={lid} style={{ width: 5, height: 5, borderRadius: "50%", background: LLM_META[lid]?.color || T.dim }} title={LLM_META[lid]?.name} />)}
+                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, flexShrink: 0 }}>
+                                    <span style={{ fontSize: 7, fontWeight: 700, fontFamily: T.fontM, padding: "1px 5px", borderRadius: 3, background: `${sevColor}12`, color: sevColor, textTransform: "uppercase" }}>{severity}</span>
+                                    <span style={{ fontSize: 9, fontFamily: T.fontM, color: T.dim }}>{freq} evidence</span>
                                   </div>
-                                  {src.contexts[0] && <div style={{ fontSize: 10, color: T.muted, marginTop: 3, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={src.contexts[0]}>{src.contexts[0]}</div>}
                                 </div>
                               );
                             })}
                           </div>
-                        </Card>
+                        </div>
                       )}
 
-                      {/* Competitive Intelligence Cards */}
-                      {competitorInsights && (
-                        <>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginBottom: 12 }}>
-                            <Card glow={T.teal}>
-                              <Label>WHAT AI SAYS {(competitorInsights.sirionKey || "SIRION").toUpperCase()} IS STRONG FOR</Label>
-                              {competitorInsights.sirionFeats.length > 0 ? (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                                  {competitorInsights.sirionFeats.map(([feat, count], i) => (
-                                    <div key={feat} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                      <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                                          <span style={{ fontSize: 11, color: T.text, fontWeight: i < 3 ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }} title={feat}>{feat}</span>
-                                          <span style={{ fontSize: 10, fontFamily: T.fontM, color: T.teal, fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>{count}x</span>
-                                        </div>
-                                        <PBar value={Math.round((count / (competitorInsights.sirionFeats[0]?.[1] || 1)) * 100)} color={T.teal} h={3} />
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: 11, color: T.dim, padding: "12px 0" }}>No feature attribution data yet.</div>
-                              )}
-                            </Card>
-                            <Card glow={T.red}>
-                              <Label>WHERE WE'RE LOSING</Label>
-                              <div style={{ fontSize: 10, color: T.dim, marginBottom: 8 }}>Queries where competitors consistently outrank {competitorInsights.sirionKey || "Sirion"}</div>
-                              {competitorInsights.losing.length > 0 ? (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                  {competitorInsights.losing.map((l) => (
-                                    <div key={l.qid} style={{ padding: "6px 8px", borderRadius: 6, background: `${T.red}06`, border: `1px solid ${T.red}15` }}>
-                                      <div style={{ fontSize: 10, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 3 }} title={l.query}>{l.query}</div>
-                                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                                        <Chip text={l.persona} color={T.purple} />
-                                        <span style={{ fontSize: 9, fontFamily: T.fontM, color: T.red }}>{l.sirionAbsent ? "ABSENT" : "#" + l.bestSirion}</span>
-                                        <span style={{ fontSize: 9, color: T.dim }}>vs</span>
-                                        <span style={{ fontSize: 9, fontFamily: T.fontM, color: VENDOR_COLORS[l.winners[0]] || T.gold, fontWeight: 600 }}>{l.winners[0]}</span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: 11, color: T.green, padding: "12px 0", fontWeight: 600 }}>No critical losses detected.</div>
-                              )}
-                            </Card>
-                          </div>
-
-                          {/* Top Actions */}
-                          {competitorInsights.topActions.length > 0 && (
-                            <Card glow={T.gold} style={{ marginBottom: 12 }}>
-                              <Label>RECOMMENDED FOCUS</Label>
-                              <div style={{ fontSize: 10, color: T.dim, marginBottom: 10 }}>Top content topics to improve AI visibility based on gap analysis</div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                {competitorInsights.topActions.map(([topic, freq], i) => (
-                                  <div key={topic} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 8px", borderRadius: 6, background: "rgba(255,255,255,0.015)", border: `1px solid ${T.gold}15` }}>
-                                    <div style={{ width: 18, height: 18, borderRadius: "50%", background: `${T.gold}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: T.gold, fontFamily: T.fontH, flexShrink: 0 }}>{i + 1}</div>
-                                    <div>
-                                      <div style={{ fontSize: 11, color: T.text, fontWeight: 500, lineHeight: 1.4 }}>{topic}</div>
-                                      <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontM, marginTop: 2 }}>Mentioned as gap in {freq} responses</div>
-                                    </div>
+                      {/* Competitive Losses */}
+                      {competitorInsights.losing.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 9, fontWeight: 700, fontFamily: T.fontM, color: T.red, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Competitive Losses</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {competitorInsights.losing.slice(0, 3).map((l) => (
+                              <div key={l.qid} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6, background: `${T.red}04`, border: `1px solid ${T.red}12` }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 10, color: T.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 3 }} title={l.query}>{l.query}</div>
+                                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                    <Chip text={l.persona} color={T.purple} />
+                                    <span style={{ fontSize: 9, fontFamily: T.fontM, color: T.red, fontWeight: 700 }}>{l.sirionAbsent ? "Absent" : `#${l.bestSirion}`}</span>
+                                    <span style={{ fontSize: 9, color: T.dim }}>vs</span>
+                                    <span style={{ fontSize: 9, fontFamily: T.fontM, color: VENDOR_COLORS[l.winners[0]] || T.gold, fontWeight: 600 }}>{l.winners[0]}</span>
                                   </div>
-                                ))}
+                                </div>
+                                <button
+                                  onClick={() => setNav("results")}
+                                  style={{ fontSize: 9, fontFamily: T.fontM, fontWeight: 600, color: T.teal, background: `${T.teal}10`, border: `1px solid ${T.teal}25`, borderRadius: 4, padding: "3px 8px", cursor: "pointer", flexShrink: 0, transition: "all 0.2s" }}
+                                  onMouseEnter={e => { e.target.style.background = `${T.teal}20`; }}
+                                  onMouseLeave={e => { e.target.style.background = `${T.teal}10`; }}
+                                >View</button>
                               </div>
-                              <Btn style={{ marginTop: 10, width: "100%" }} onClick={() => setNav("gaps")}>View All Content Gaps</Btn>
-                            </Card>
-                          )}
-                        </>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                    </>
+                    </Card>
                   )}
+
+
+                  {/* ═══ CTA STRIP ═══ */}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginTop: 6 }}>
+                    {[
+                      { label: "View Full Evidence in Results", nav: "results", color: T.teal },
+                      { label: "Build Executive Report", nav: "report", color: T.blue },
+                      { label: "Open Content Gaps", nav: "gaps", color: T.gold },
+                    ].map(cta => (
+                      <button
+                        key={cta.nav}
+                        onClick={() => setNav(cta.nav)}
+                        style={{
+                          padding: "8px 20px", borderRadius: 6, border: `1px solid ${cta.color}35`,
+                          background: `${cta.color}08`, color: cta.color, fontSize: 11, fontWeight: 700,
+                          fontFamily: T.fontM, cursor: "pointer", letterSpacing: 0.3,
+                          transition: "all 0.2s ease",
+                        }}
+                        onMouseEnter={e => { e.target.style.background = `${cta.color}20`; }}
+                        onMouseLeave={e => { e.target.style.background = `${cta.color}08`; }}
+                      >
+                        {cta.label} {"\u2192"}
+                      </button>
+                    ))}
+                  </div>
                 </>
               )}
             </div>
@@ -4145,7 +4065,7 @@ export default function App() {
                     )}
 
                     {/* Phase 4: Content Planning Panel */}
-                    <ContentPlanningPanel T={T} Card={Card} Label={Label} Btn={Btn} Chip={Chip} BadgeEl={BadgeEl} topGaps={topG} company={pipeline.meta?.company || "Sirion"} />
+                    <ContentPlanningPanel T={T} Card={Card} Label={Label} Btn={Btn} Chip={Chip} BadgeEl={BadgeEl} topGaps={topG} company={pipeline.meta?.company || "Sirion"} initialData={pipeline.m2?.contentPipeline} onPersist={(items) => updateModule("m2", { contentPipeline: items })} />
 
                     <Card glow={T.purple}>
                       <Label>HOW AI FRAMES {(pipeline.meta?.company || "SIRION").toUpperCase()}'S IDENTITY</Label>
@@ -4748,7 +4668,7 @@ export default function App() {
               </Card>
 
               {/* ── CALIBRATION CONTROLS ── */}
-              <CalibrationPanel T={T} Card={Card} Label={Label} Btn={Btn} BadgeEl={BadgeEl} />
+              <CalibrationPanel T={T} Card={Card} Label={Label} Btn={Btn} BadgeEl={BadgeEl} onPersist={(cal) => updateModule("m2", { calibration: cal })} />
             </div>
           )}
 
