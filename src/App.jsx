@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, Component, lazy, Suspense } from "react";
 import { themes, ThemeContext } from "./ThemeContext";
 import { PipelineProvider, usePipeline } from "./PipelineContext";
 import { GOOGLE_FONTS_URL } from "./typography";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, RadialBarChart, RadialBar } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, RadialBarChart, RadialBar, Legend } from "recharts";
+import { NARRATIVE_CLASSES } from "./scanEngine";
 
 // BUG-009 fix: lazy-load heavy module components for code splitting
 const QuestionGenerator = lazy(() => import("./QuestionGenerator"));
@@ -20,14 +21,40 @@ const StrategyAdvisor = lazy(() => import("./StrategyAdvisor"));
    ═══════════════════════════════════════════════════════ */
 
 const MODULES = [
-  { id: "home", n: "0", label: "Dashboard", icon: "\u25C9" },
-  { id: "m1", n: "1", label: "Question Generator", icon: "\u2753" },
-  { id: "m2", n: "2", label: "Perception Monitor", icon: "\uD83D\uDD2D" },
-  { id: "m3", n: "3", label: "Authority Ring", icon: "\u25CE" },
-  { id: "m4", n: "4", label: "Buying Stage Guide", icon: "\uD83E\uDDED" },
-  { id: "m5", n: "5", label: "CLM Advisor", icon: "\u26A1" },
-  { id: "settings", n: "\u2699", label: "Settings", section: "system" },
+  { id: "home", n: "0", label: "Dashboard", icon: "\u25C9", path: "/" },
+  { id: "m1", n: "1", label: "Question Generator", icon: "\u2753", path: "/questions" },
+  { id: "m2", n: "2", label: "Perception Monitor", icon: "\uD83D\uDD2D", path: "/perception" },
+  { id: "m3", n: "3", label: "Authority Ring", icon: "\u25CE", path: "/authority" },
+  { id: "m4", n: "4", label: "Buying Stage Guide", icon: "\uD83E\uDDED", path: "/buying-stage" },
+  { id: "m5", n: "5", label: "CLM Advisor", icon: "\u26A1", path: "/advisor" },
+  { id: "settings", n: "\u2699", label: "Settings", section: "system", path: "/settings" },
 ];
+
+/* ── Hash-based URL routing ── */
+const pathToId = Object.fromEntries(MODULES.map(m => [m.path, m.id]));
+const idToPath = Object.fromEntries(MODULES.map(m => [m.id, m.path]));
+
+function getModuleFromHash() {
+  const hash = window.location.hash.replace("#", "") || "/";
+  return pathToId[hash] || "home";
+}
+
+function useHashRouter() {
+  const [active, setActiveState] = useState(getModuleFromHash);
+
+  useEffect(() => {
+    const onHash = () => setActiveState(getModuleFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const setActive = (id) => {
+    const path = idToPath[id] || "/";
+    window.location.hash = path;
+  };
+
+  return [active, setActive];
+}
 
 const useIsMobile = () => {
   const [m, setM] = useState(false);
@@ -150,6 +177,14 @@ function Dashboard({ t, onNavigate }) {
     { name: "Full-Stack", count: clmCounts["full-stack"], color: "#a78bfa", desc: "End-to-end platform, analytics" },
   ];
 
+  // Narrative Classification — pre-computed by M2 when scan completes
+  const narrativeData = ps?.m2?.narrativeBreakdown || null;
+
+  const narrativeDonutData = useMemo(() => {
+    if (!narrativeData) return [];
+    return (narrativeData.breakdown || []).filter(b => b.count > 0 && b.id !== "absent");
+  }, [narrativeData]);
+
   // M3 Authority Ring — FIXED: was reading ps.m3.domains (wrong), now reads ps.m3.prioritizedDomains
   const m3DomainsArr = Array.isArray(ps?.m3?.prioritizedDomains) ? ps.m3.prioritizedDomains : [];
   const gapCount = ps?.m3?.gapCount || 0;
@@ -258,6 +293,48 @@ function Dashboard({ t, onNavigate }) {
           </div>
         ))}
       </div>
+
+      {/* ── STRATEGIC FOCUS ── */}
+      {(() => {
+        const postSigPct = narrativeData?.postSigPct || 0;
+        const opp = gapCount > 0
+          ? { desc: `Close ${gapCount} authority gaps \u2014 high-DA domains are missing Sirion presence`, go: "m3" }
+          : mentionRate < 50
+          ? { desc: `Increase AI mention rate from ${mentionRate}% \u2014 publish targeted CLM content`, go: "m2" }
+          : { desc: "Expand persona research to unlock new buying signals", go: "m1" };
+        const risk = postSigPct > 40
+          ? { desc: `Post-sig framing at ${postSigPct}% \u2014 AI still sees Sirion as narrow specialist`, go: "m2" }
+          : mentionRate < 30
+          ? { desc: `Critical: AI mentions Sirion in only ${mentionRate}% of queries`, go: "m2" }
+          : gapCount > totalDomains * 0.5
+          ? { desc: "Over half of authority domains have zero Sirion presence", go: "m3" }
+          : { desc: "Monitor competitive positioning \u2014 maintain current trajectory", go: "m2" };
+        const up = unresearchedPersonas[0];
+        const win = up
+          ? { desc: `Research ${up.name} \u2014 persona intelligence ready in 2 minutes`, go: "m1" }
+          : scanScores && overallScore < 60
+          ? { desc: "Re-scan to track recent content impact on AI visibility", go: "m2" }
+          : { desc: "Run a benchmark scan to validate 10 ground-truth questions", go: "m2" };
+        const items = [
+          { title: "TOP OPPORTUNITY", color: "#2dd4bf", ...opp },
+          { title: "BIGGEST RISK", color: "#ef4444", ...risk },
+          { title: "QUICK WIN", color: "#22c55e", ...win },
+        ];
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
+            {items.map((it, i) => (
+              <div key={i} style={{ ...card({ padding: "16px 18px" }), display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ width: 26, height: 26, borderRadius: "50%", background: `${it.color}26`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: it.color }} />
+                </div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: it.color, letterSpacing: 1.2, fontFamily: "var(--mono)" }}>{it.title}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: t.textSec, lineHeight: 1.4 }}>{it.desc}</div>
+                <button onClick={() => onNavigate(it.go)} style={{ alignSelf: "flex-start", marginTop: "auto", padding: "3px 12px", borderRadius: 5, border: `1px solid ${t.border}`, background: "transparent", color: t.textDim, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "var(--mono)" }}>Go</button>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* ── SCAN PROGRESS + STALENESS ── */}
       {(staleness.m2 || staleness.m3 || scanProgress) && (
@@ -493,6 +570,85 @@ function Dashboard({ t, onNavigate }) {
         </div>
       </div>
 
+      {/* ── ROW 4.5: NARRATIVE CLASSIFICATION ── */}
+      {narrativeDonutData.length > 0 && narrativeData && (
+        <div style={{ ...card({ padding: "18px 20px", marginBottom: 16 }) }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: narrativeData.narrativeScore >= 50 ? "#22c55e" : narrativeData.narrativeScore >= 25 ? "#f59e0b" : "#ef4444", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: "var(--mono)" }}>
+              AI Narrative Classification
+            </span>
+            <button onClick={() => onNavigate("m2")} style={{
+              padding: "4px 12px", borderRadius: 6, border: `1px solid ${t.border}`,
+              background: "transparent", color: t.textSec, fontSize: 10, fontWeight: 600,
+              cursor: "pointer", fontFamily: "var(--mono)",
+            }}>Details in M2</button>
+          </div>
+          <div style={{ fontSize: 10, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 12 }}>
+            How AI frames {ps?.m2?.scanResults?.company || "Sirion"} when mentioned — the story AI tells, not just mention counts
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 20, alignItems: "center" }}>
+            {/* Left: Donut */}
+            <div style={{ position: "relative", width: 170 }}>
+              <ResponsiveContainer width={170} height={170}>
+                <PieChart>
+                  <Pie data={narrativeDonutData} dataKey="count" nameKey="label" cx="50%" cy="50%"
+                    innerRadius={48} outerRadius={68} paddingAngle={3} strokeWidth={0}>
+                    {narrativeDonutData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                  </Pie>
+                  <Tooltip content={({ payload }) => {
+                    if (!payload?.length) return null;
+                    const d = payload[0].payload;
+                    return (<div style={{ background: t.tooltipBg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "8px 12px", fontSize: 11, fontFamily: "var(--mono)" }}>
+                      <div style={{ fontWeight: 700, color: d.color }}>{d.label}</div>
+                      <div style={{ color: t.textDim }}>{d.count} responses ({d.pct}%)</div>
+                      <div style={{ color: t.textGhost, fontSize: 10 }}>{d.desc}</div>
+                    </div>);
+                  }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", pointerEvents: "none" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "var(--mono)", color: narrativeData.narrativeScore >= 50 ? "#22c55e" : narrativeData.narrativeScore >= 25 ? "#f59e0b" : "#ef4444" }}>{narrativeData.narrativeScore}</div>
+                <div style={{ fontSize: 7, color: t.textDim, fontFamily: "var(--mono)", textTransform: "uppercase" }}>health</div>
+              </div>
+            </div>
+            {/* Right: Key metrics + legend */}
+            <div>
+              {/* 3 key metrics */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                {[
+                  { l: "Post-Sig Only", v: narrativeData.postSigPct, c: "#ef4444", sub: "The problem" },
+                  { l: "Full-Stack", v: narrativeData.fullStackPct, c: "#22c55e", sub: "The goal" },
+                  { l: "Pre-Sig", v: narrativeData.preSigPct, c: "#3b82f6", sub: "Progress" },
+                ].map(m => (
+                  <div key={m.l} style={{ flex: 1, textAlign: "center", padding: "8px 4px", borderRadius: 6, background: m.c + "08", border: `1px solid ${m.c}15` }}>
+                    <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "var(--mono)", color: m.c }}>{m.v}%</div>
+                    <div style={{ fontSize: 9, color: t.textSec }}>{m.l}</div>
+                    <div style={{ fontSize: 8, color: t.textGhost }}>{m.sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Legend */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {narrativeDonutData.map(d => (
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 7, height: 7, borderRadius: 2, background: d.color }} />
+                    <span style={{ fontSize: 9, fontFamily: "var(--mono)", color: t.textSec }}>{d.label} {d.pct}%</span>
+                  </div>
+                ))}
+              </div>
+              {/* Insight */}
+              <div style={{ fontSize: 10, color: narrativeData.postSigPct > 40 ? "#ef4444" : narrativeData.fullStackPct > 30 ? "#22c55e" : "#f59e0b", padding: "6px 8px", marginTop: 8, background: (narrativeData.postSigPct > 40 ? "#ef4444" : narrativeData.fullStackPct > 30 ? "#22c55e" : "#f59e0b") + "08", borderRadius: 5, lineHeight: 1.5 }}>
+                {narrativeData.postSigPct > 40
+                  ? `${narrativeData.postSigPct}% of AI responses still frame ${ps?.m2?.scanResults?.company || "Sirion"} as post-sig only. Publish full-stack content to shift the narrative.`
+                  : narrativeData.fullStackPct > 30
+                  ? `${narrativeData.fullStackPct}% full-stack framing achieved. Continue publishing to strengthen positioning.`
+                  : `Mixed narrative — AI is uncertain about positioning. Targeted content will clarify.`}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── ROW 5: PERSONA COVERAGE RINGS ── */}
       {m1Personas.length > 0 && (
         <div style={{ ...card({ padding: "16px 20px" }) }}>
@@ -526,6 +682,7 @@ function SettingsPage({ t }) {
   const [geminiKey, setGeminiKey] = useState(localStorage.getItem("xt_gemini_key") || "");
   const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("xt_openai_key") || "");
   const [perplexityKey, setPerplexityKey] = useState(localStorage.getItem("xt_perplexity_key") || "");
+  const [grokKey, setGrokKey] = useState(localStorage.getItem("xt_grok_key") || "");
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -533,6 +690,7 @@ function SettingsPage({ t }) {
     if (geminiKey) localStorage.setItem("xt_gemini_key", geminiKey); else localStorage.removeItem("xt_gemini_key");
     if (openaiKey) localStorage.setItem("xt_openai_key", openaiKey); else localStorage.removeItem("xt_openai_key");
     if (perplexityKey) localStorage.setItem("xt_perplexity_key", perplexityKey); else localStorage.removeItem("xt_perplexity_key");
+    if (grokKey) localStorage.setItem("xt_grok_key", grokKey); else localStorage.removeItem("xt_grok_key");
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -573,6 +731,10 @@ function SettingsPage({ t }) {
           <label style={label}>Perplexity API Key</label>
           <input value={perplexityKey} onChange={e => setPerplexityKey(e.target.value)} placeholder="pplx-..." type="password" style={inp} />
         </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={label}>xAI Grok API Key (Dual-Engine Research)</label>
+          <input value={grokKey} onChange={e => setGrokKey(e.target.value)} placeholder="xai-..." type="password" style={inp} />
+        </div>
         <button onClick={handleSave} style={{
           padding: "10px 24px", borderRadius: 8, border: "none", fontWeight: 700, fontSize: 13,
           background: saved ? "#34d399" : t.brand, color: "#fff", cursor: "pointer",
@@ -601,7 +763,7 @@ function SettingsPage({ t }) {
           {[
             { label: "Version", value: "1.0.0" },
             { label: "Modules", value: "5 Active" },
-            { label: "AI Provider", value: "Claude (Anthropic)" },
+            { label: "AI Provider", value: "Claude + Grok (Dual-Engine)" },
             { label: "Storage", value: "IndexedDB + Firebase" },
           ].map((item, i) => (
             <div key={i} style={{ padding: "10px 0" }}>
@@ -674,7 +836,7 @@ function ModuleArea({ renderContent, t }) {
 /* ── Main App ── */
 export default function App() {
   const [isDark, setIsDark] = useState(true);
-  const [active, setActive] = useState("home");
+  const [active, setActive] = useHashRouter();
   const [sbOpen, setSbOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
   const mob = useIsMobile();

@@ -7,7 +7,7 @@ import seedPipeline from "../data/pipelines/local_master.json";
 const COLLECTION = "pipelines";
 
 // ── Data version: bump this after any seed/reset to clear ALL stale caches ──
-const DATA_VERSION = "2026-03-03-v4";
+const DATA_VERSION = "2026-03-07-v5";
 (function clearStaleCache() {
   try {
     if (typeof localStorage === "undefined") return;
@@ -28,10 +28,10 @@ const INITIAL_STATE = {
   _saving: false,
   meta: { company: "Sirion", url: "https://sirion.ai", industry: "Contract Lifecycle Management" },
   // Phase 3: generationId fields track data freshness across modules
-  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [], decisionScores: {}, generationId: null },
+  m1: { questions: [], personas: [], clusters: [], generatedAt: null, personaProfiles: [], decisionScores: {}, yinMatrix: null, generationId: null, scanBatch: null },
   m2: { scanResults: null, scores: null, contentGaps: [], personaBreakdown: [], stageBreakdown: [], recommendations: [], scannedAt: null, scanProgress: null, generationId: null, m1GenerationId: null },
   m3: { prioritizedDomains: [], gapMatrix: null, outreachPlan: null, personaDomainMap: null, gapCount: 0, strongCount: 0, analyzedAt: null, generationId: null, m2GenerationId: null },
-  m4: { analyses: [], latestStage: null, latestReadiness: null, analyzedAt: null, generationId: null },
+  m4: { analyses: [], latestStage: null, latestReadiness: null, companyBuckets: {}, analyzedAt: null, generationId: null },
   m5: { recommendations: [], leadData: null, generatedAt: null, generationId: null },
 };
 
@@ -127,16 +127,38 @@ export function PipelineProvider({ children }) {
             }
           } catch (e) { console.warn("[Pipeline] localStorage merge check failed:", e.message); }
 
+          // Backfill M1: if Firebase has fewer questions than seed, use seed questions
+          // This prevents data loss when Firebase has a stale/partial snapshot
+          let needsResave = false;
+          const fbQCount = merged.m1?.questions?.length || 0;
+          const seedQCount = seedPipeline?.m1?.questions?.length || 0;
+          if (seedQCount > 0 && fbQCount < seedQCount) {
+            console.info(`[Pipeline] Firebase M1 has ${fbQCount} questions but seed has ${seedQCount} — restoring seed questions`);
+            merged.m1 = { ...INITIAL_STATE.m1, ...seedPipeline.m1 };
+            needsResave = true;
+          }
+
           // Backfill: if Firebase has no M2/M3 scan data, use bundled seed sample data
           for (const mod of ["m2", "m3"]) {
             const hasData = mod === "m2" ? !!merged.m2?.scores : (merged.m3?.prioritizedDomains?.length > 0);
             if (!hasData && seedPipeline?.[mod]) {
               merged[mod] = { ...INITIAL_STATE[mod], ...seedPipeline[mod] };
               console.info(`[Pipeline] Backfilled ${mod} from bundled seed data`);
+              needsResave = true;
             }
           }
 
           dispatch({ type: "LOAD", payload: { ...merged, _docId: docId } });
+
+          // If any backfill happened, push corrected data back to Firebase
+          if (needsResave) {
+            queueMicrotask(() => {
+              if (pmRef.current) {
+                pmRef.current.enqueueSave();
+                console.info("[Pipeline] Saving backfilled data to Firebase");
+              }
+            });
+          }
         } else {
           // No Firebase docs — try localStorage snapshot
           try {

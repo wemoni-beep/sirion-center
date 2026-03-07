@@ -2943,44 +2943,28 @@
     "generatedAt": "2026-03-03T11:52:59.402Z",
     "personaProfiles": [
       {
-        "id": "cio",
-        "label": "Chief Information Officer",
-        "questionCount": 27
+        "id": "persona-foulath-holding-jaffar-alshehabi,-mba-1772453547359",
+        "name": "Jaffar Alshehabi, MBA",
+        "title": "Chief Procurement Officer",
+        "company": "Foulath Holding",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cpo",
+        "researchSummary": "Jaffar is a meticulous, data-driven executive managing multi-billion dollar supplier relationships with direct board accountability. His recent promotion to CPO coincides with managing increasingly complex global contracts.",
+        "clmReadiness": 8.2,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-02T15:14:21.418Z"
       },
       {
-        "id": "cm",
-        "label": "Contract Manager",
-        "questionCount": 19
-      },
-      {
-        "id": "gc",
-        "label": "General Counsel",
-        "questionCount": 36
-      },
-      {
-        "id": "vplo",
-        "label": "VP Legal Operations",
-        "questionCount": 30
-      },
-      {
-        "id": "cto",
-        "label": "Chief Technology Officer",
-        "questionCount": 22
-      },
-      {
-        "id": "cpo",
-        "label": "Chief Procurement Officer",
-        "questionCount": 16
-      },
-      {
-        "id": "cfo",
-        "label": "Chief Financial Officer",
-        "questionCount": 20
-      },
-      {
-        "id": "pd",
-        "label": "Procurement Director",
-        "questionCount": 12
+        "id": "persona-bahrain-steel-bsc-eman-ebrahim-1772464159106",
+        "name": "Eman Ebrahim",
+        "title": "General Manager Sales and Marketing - Acting General Manager Supply Chain",
+        "company": "Bahrain Steel BSC",
+        "companyUrl": "https://sirion.ai",
+        "personaType": "cm",
+        "researchSummary": "Eman is a highly educated, analytically-driven supply chain leader managing significant procurement complexity at Bahrain Steel. Her INSEAD Executive MBA and recent strategic decision-making training makes her an ideal CLM prospect.",
+        "clmReadiness": 8.2,
+        "source": "linkedin-paste",
+        "researchedAt": "2026-03-02T15:12:52.412Z"
       }
     ]
   },

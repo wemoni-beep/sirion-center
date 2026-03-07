@@ -204,6 +204,21 @@ const Stat = ({ label, value, color = T.text, sub }) => (
   </div>
 );
 
+/* ─── Insight Banner: "So what? Now what?" for every tab ─── */
+const InsightBanner = ({ color, insight, action, style: s = {} }) => (
+  <div style={{
+    marginBottom: 16, padding: "14px 18px", borderRadius: 10,
+    background: `linear-gradient(135deg, ${color}06 0%, transparent 100%)`,
+    border: `1px solid ${color}18`, borderLeft: `3px solid ${color}`,
+    ...s,
+  }}>
+    <div style={{ fontSize: 12, color: T.text, lineHeight: 1.6, fontFamily: T.b }}>{insight}</div>
+    {action && (
+      <div style={{ fontSize: 12, color, lineHeight: 1.6, fontFamily: T.b, marginTop: 6, fontWeight: 600 }}>{action}</div>
+    )}
+  </div>
+);
+
 /* ═══════════════════════════════════════════════════════
    MAIN APPLICATION
    ═══════════════════════════════════════════════════════ */
@@ -430,6 +445,58 @@ export default function AuthorityRing() {
 
   const categories = useMemo(() => [...new Set(DOMAINS.map(d => d.category))].sort(), []);
 
+  // Force re-sync perception data from M2 pipeline
+  const forceResyncPerception = useCallback(() => {
+    setPipelineM2Loaded(false);
+    setPerceptionData(null);
+    setPerceptionStatus(null);
+  }, []);
+
+  // Computed insights for every tab — "So what? Now what?"
+  const insights = useMemo(() => {
+    // Ring: top gaps by priority
+    const topGaps = enhancedDomains
+      .filter(d => d.sirionStatus === "verified_zero")
+      .sort((a, b) => (b.enhancedPriority || b.priorityScore) - (a.enhancedPriority || a.priorityScore))
+      .slice(0, 3);
+    // Gap Matrix
+    const icertisGaps = DOMAINS.filter(d => d.sirionStatus === "verified_zero" && d.icertisPresent).length;
+    const whiteSpace = DOMAINS.filter(d => d.sirionStatus === "verified_zero" && !d.icertisPresent).length;
+    // Outreach
+    const allZeros = DOMAINS.filter(d => d.sirionStatus === "verified_zero");
+    const outreachDone = allZeros.filter(d => outreachTracker[d.id]?.status === "DONE").length;
+    const outreachIP = allZeros.filter(d => outreachTracker[d.id]?.status === "IN_PROGRESS").length;
+    const quickWins = allZeros.filter(d => d.fiverr || d.difficulty === "easy").length;
+    // Cost
+    const top5Gaps = enhancedDomains
+      .filter(d => d.sirionStatus === "verified_zero")
+      .sort((a, b) => (b.enhancedPriority || b.priorityScore) - (a.enhancedPriority || a.priorityScore))
+      .slice(0, 5);
+    const top5CostLow = top5Gaps.reduce((s, d) => s + (d.estCostLow || 0), 0);
+    const top5CostHigh = top5Gaps.reduce((s, d) => s + (d.estCostHigh || 0), 0);
+    const top5Personas = [...new Set(top5Gaps.flatMap(d => d.buyerPersonas || []))];
+    // Persona coverage
+    const pCov = PERSONAS.map(p => {
+      const doms = DOMAINS.filter(d => d.buyerPersonas?.includes(p.id));
+      const present = doms.filter(d => d.sirionStatus !== "verified_zero").length;
+      const pct = doms.length ? Math.round((present / doms.length) * 100) : 0;
+      const topUncovered = doms.filter(d => d.sirionStatus === "verified_zero")
+        .sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 2);
+      return { ...p, pct, present, total: doms.length, topUncovered };
+    }).sort((a, b) => a.pct - b.pct);
+    // Perception
+    const pbArr = asArray(perceptionData?.personaBreakdown);
+    const weakPerceptionCount = pbArr.filter(p => p.mentionRate < 70).length;
+    return {
+      ring: { topGaps },
+      gaps: { icertisGaps, whiteSpace },
+      outreach: { done: outreachDone, inProgress: outreachIP, quickWins, totalTargets: allZeros.length },
+      cost: { top5Gaps, top5CostLow, top5CostHigh, top5Personas },
+      persona: { weakest: pCov[0], strongest: pCov[pCov.length - 1] },
+      perception: { weakPerceptionCount },
+    };
+  }, [enhancedDomains, outreachTracker, perceptionData]);
+
   // Push M3 output to pipeline (auto-triggered whenever perception data or citations change)
   useEffect(() => {
     // Only write if we have SOME data (perception or citations)
@@ -514,6 +581,12 @@ export default function AuthorityRing() {
         {/* ═══ TAB: AUTHORITY RING ═══ */}
         {nav === "ring" && (
           <>
+            {/* Insight Banner */}
+            <InsightBanner color={T.accent}
+              insight={<>{stats.zeros} of {stats.total} tracked domains have <span style={{ fontWeight: 800, color: T.red }}>zero</span> Sirion presence. {stats.present} have content but wrong narrative. {stats.strong} are strong partnerships to leverage.</>}
+              action={<>Focus first on {insights.ring.topGaps.map((d, i) => <span key={d.id}>{i > 0 && ", "}<span style={{ color: T.text }}>{d.domain}</span> (DA {d.da})</span>)} — these are the highest-impact gaps.</>}
+            />
+
             {/* Competitive Alert Banner */}
             {(() => {
               const icertisCount = DOMAINS.filter(d => d.icertisPresent).length;
@@ -756,8 +829,29 @@ export default function AuthorityRing() {
         {/* ═══ TAB: PERCEPTION INTEL (M2→M3 Bridge) ═══ */}
         {nav === "perception" && (
           <>
-            <Label color={T.teal}>PERCEPTION INTELLIGENCE — M2→M3 AUTO-BRIDGE</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>
+            {/* Insight Banner */}
+            {perceptionData ? (
+              <InsightBanner color={T.teal}
+                insight={<>M2 perception score: <span style={{ fontWeight: 800, color: T.teal }}>{perceptionData.scores?.overall}/100</span>. {insights.perception.weakPerceptionCount > 0 ? <>{insights.perception.weakPerceptionCount} personas below 70% mention rate.</> : <>All personas above 70% mention rate.</>} {aiCitedDomains.length > 0 && <>{aiCitedDomains.length} Authority Ring domains are actively cited by AI models.</>}</>}
+                action={<>Domain priority scores have been boosted based on perception gaps. Switch to the Ring tab to see enhanced priorities.</>}
+              />
+            ) : (
+              <InsightBanner color={T.dim}
+                insight={<>No perception data available yet. Run a scan in <span style={{ fontWeight: 800, color: T.accent }}>Perception Monitor</span> to enable intelligent domain prioritization based on AI citation gaps, weak personas, and content opportunities.</>}
+                action={<>Without M2 data, domain priorities are based on static DA scores and manual verification only.</>}
+              />
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: T.teal, letterSpacing: "0.16em", fontWeight: 700, textTransform: "uppercase", fontFamily: T.m }}>PERCEPTION INTELLIGENCE — M2→M3 AUTO-BRIDGE</div>
+              <span style={{ flex: 1 }} />
+              {perceptionData && (
+                <button onClick={forceResyncPerception} style={{ fontSize: 10, fontFamily: T.m, color: T.teal, background: T.teal + "10", border: `1px solid ${T.teal}25`, borderRadius: 5, padding: "4px 10px", cursor: "pointer", letterSpacing: "0.04em" }}>
+                  Refresh from latest scan
+                </button>
+              )}
+            </div>
+            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5, marginTop: -8 }}>
               Scan data from the Perception Monitor flows automatically into Authority Ring.
               Domain priority scores are boosted based on how well each domain addresses your weakest personas, content gaps, and AI citation patterns.
             </p>
@@ -1026,56 +1120,254 @@ export default function AuthorityRing() {
         {/* ═══ TAB: GAP MATRIX ═══ */}
         {nav === "gaps" && (
           <>
-            <Label color={T.accent}>AUTHORITY GAP MATRIX — SIRION vs ICERTIS</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>Domains where Icertis has presence but Sirion doesn't. These are the gaps driving AI citation losses.</p>
-            
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
-              <Panel glow={T.red}>
-                <Label color={T.red}>ICERTIS HAS, SIRION DOESN'T</Label>
-                {DOMAINS.filter(d => d.sirionStatus === "verified_zero" && d.icertisPresent).map(d => (
-                  <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${T.border}` }}>
-                    <span style={{ fontSize: 11, color: T.text }}>{d.domain}</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
-                      <DifficultyBadge d={d.difficulty} />
-                    </div>
-                  </div>
-                ))}
-              </Panel>
-              <Panel glow={T.gold}>
-                <Label color={T.gold}>BOTH ABSENT — WHITE SPACE</Label>
-                {DOMAINS.filter(d => d.sirionStatus === "verified_zero" && !d.icertisPresent).map(d => (
-                  <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${T.border}` }}>
-                    <span style={{ fontSize: 11, color: T.text }}>{d.domain}</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
-                      <Chip text="FIRST MOVER" color={T.teal} small />
-                    </div>
-                  </div>
-                ))}
-              </Panel>
-            </div>
+            {/* Insight Banner */}
+            <InsightBanner color={T.red}
+              insight={<><span style={{ fontWeight: 800, color: T.red }}>{insights.gaps.icertisGaps}</span> domains where Icertis is present and Sirion is absent — these are the competitive gaps driving AI citation losses. <span style={{ fontWeight: 800, color: T.gold }}>{insights.gaps.whiteSpace}</span> domains are white space with first-mover advantage. <span style={{ fontWeight: 800, color: T.accent }}>{stats.narrativeGaps}</span> existing pages reinforce the wrong narrative.</>}
+              action={<>Close the {insights.gaps.icertisGaps} Icertis-held gaps first to reach competitive parity, then target white-space domains before competitors claim them.</>}
+            />
 
-            <Label color={T.gold}>SIRION PRESENT — WRONG NARRATIVE</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>These domains have Sirion content but it reinforces the post-signature specialist perception.</p>
-            {DOMAINS.filter(d => d.narrativeGap).map(d => (
-              <Panel key={d.id} style={{ padding: "10px 14px", marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>{d.domain}</span>
-                    <StatusBadge status={d.sirionStatus} />
+            {/* Summary Stats Bar */}
+            {(() => {
+              const icGaps = DOMAINS.filter(d => d.sirionStatus === "verified_zero" && d.icertisPresent);
+              const wsGaps = DOMAINS.filter(d => d.sirionStatus === "verified_zero" && !d.icertisPresent);
+              const narGaps = DOMAINS.filter(d => d.narrativeGap);
+              const allGapsSorted = [...icGaps, ...wsGaps].sort((a, b) => {
+                const scoreA = (a.da / 100) * (a.aiCitationWeight || 50) * (a.icertisPresent ? 1.5 : 1);
+                const scoreB = (b.da / 100) * (b.aiCitationWeight || 50) * (b.icertisPresent ? 1.5 : 1);
+                return scoreB - scoreA;
+              });
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 18 }}>
+                    <Panel glow={T.red} style={{ padding: "12px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 26, fontWeight: 900, fontFamily: T.h, color: T.red }}>{icGaps.length}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.red, letterSpacing: "0.1em", marginTop: 2 }}>COMPETITIVE GAPS</div>
+                      <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 2 }}>Icertis present, Sirion absent</div>
+                    </Panel>
+                    <Panel glow={T.gold} style={{ padding: "12px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 26, fontWeight: 900, fontFamily: T.h, color: T.gold }}>{wsGaps.length}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.gold, letterSpacing: "0.1em", marginTop: 2 }}>WHITE SPACE</div>
+                      <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 2 }}>First-mover advantage</div>
+                    </Panel>
+                    <Panel glow={T.accent} style={{ padding: "12px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 26, fontWeight: 900, fontFamily: T.h, color: T.accent }}>{narGaps.length}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.accent, letterSpacing: "0.1em", marginTop: 2 }}>NARRATIVE MISALIGNED</div>
+                      <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 2 }}>Present but wrong positioning</div>
+                    </Panel>
                   </div>
-                  <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>{d.category}</span>
-                </div>
-                <p style={{ fontSize: 11, color: T.gold, marginTop: 4, lineHeight: 1.4, fontStyle: "italic" }}>{d.narrativeGap}</p>
-              </Panel>
-            ))}
+
+                  {/* Priority-Ranked Gap Table */}
+                  <Label color={T.accent}>PRIORITY-RANKED GAPS — ALL ZERO-PRESENCE DOMAINS</Label>
+                  <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Ranked by DA x AI citation weight x competitive multiplier. Higher score = close this gap first.</p>
+                  <div style={{ borderRadius: 10, border: `1px solid ${T.border}`, overflow: "hidden", marginBottom: 24 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: T.surface, minWidth: 700 }}>
+                      <thead>
+                        <tr>
+                          {[{ l: "#", w: 36 }, { l: "DOMAIN" }, { l: "DA", w: 44 }, { l: "IMPACT", w: 60 }, { l: "TYPE", w: 100 }, { l: "EST. COST", w: 95 }, { l: "DIFF", w: 60 }, { l: "ACTION", w: 100 }].map(h => (
+                            <th key={h.l} style={{ padding: "6px 10px", fontSize: 10, fontWeight: 700, fontFamily: T.m, letterSpacing: "0.05em", color: T.dim, borderBottom: `2px solid ${T.border}`, textAlign: h.l === "#" || h.l === "DA" || h.l === "IMPACT" || h.l === "DIFF" ? "center" : h.l === "EST. COST" ? "right" : "left", width: h.w || "auto", whiteSpace: "nowrap" }}>{h.l}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allGapsSorted.map((d, idx) => {
+                          const impactScore = Math.round((d.da / 100) * (d.aiCitationWeight || 50) * (d.icertisPresent ? 1.5 : 1));
+                          return (
+                            <tr key={d.id} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
+                              <td style={{ padding: "7px 10px", fontSize: 11, fontFamily: T.m, borderBottom: `1px solid ${T.border}`, textAlign: "center", color: T.dim }}>{idx + 1}</td>
+                              <td style={{ padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, fontWeight: 600, color: T.text }}>
+                                {d.domain}
+                                {d.fiverr && <span style={{ marginLeft: 6, fontSize: 8, fontWeight: 700, fontFamily: T.m, color: T.blue, background: T.blue + "18", padding: "1px 5px", borderRadius: 3 }}>FIVERR</span>}
+                              </td>
+                              <td style={{ padding: "7px 10px", fontSize: 11, fontFamily: T.m, borderBottom: `1px solid ${T.border}`, textAlign: "center", fontWeight: 600, color: d.da >= 90 ? T.green : T.muted }}>{d.da}</td>
+                              <td style={{ padding: "7px 10px", fontSize: 12, fontFamily: T.h, borderBottom: `1px solid ${T.border}`, textAlign: "center", fontWeight: 800, color: impactScore >= 100 ? T.red : impactScore >= 70 ? T.gold : T.muted }}>{impactScore}</td>
+                              <td style={{ padding: "7px 10px", fontSize: 10, fontFamily: T.m, borderBottom: `1px solid ${T.border}`, color: d.icertisPresent ? T.red : T.teal }}>
+                                {d.icertisPresent ? "Competitive Gap" : "White Space"}
+                              </td>
+                              <td style={{ padding: "7px 10px", fontSize: 10, fontFamily: T.m, borderBottom: `1px solid ${T.border}`, textAlign: "right", color: T.text }}>${(d.estCostLow / 1000).toFixed(1)}K–${(d.estCostHigh / 1000).toFixed(1)}K</td>
+                              <td style={{ padding: "7px 10px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}`, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                              <td style={{ padding: "7px 6px", fontSize: 11, fontFamily: T.b, borderBottom: `1px solid ${T.border}` }}>
+                                <button onClick={() => { setNav("outreach"); setOutreachFilter("all"); }} style={{ fontSize: 9, fontFamily: T.m, fontWeight: 700, color: T.teal, background: T.teal + "10", border: `1px solid ${T.teal}25`, borderRadius: 4, padding: "3px 8px", cursor: "pointer", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+                                  Close Gap →
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Side-by-side breakdown (preserved, now below priority table) */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+                    <Panel glow={T.red}>
+                      <Label color={T.red}>ICERTIS HAS, SIRION DOESN'T</Label>
+                      {icGaps.sort((a, b) => b.da - a.da).map(d => (
+                        <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${T.border}` }}>
+                          <span style={{ fontSize: 11, color: T.text }}>{d.domain}</span>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
+                            <DifficultyBadge d={d.difficulty} />
+                          </div>
+                        </div>
+                      ))}
+                    </Panel>
+                    <Panel glow={T.gold}>
+                      <Label color={T.gold}>BOTH ABSENT — WHITE SPACE</Label>
+                      {wsGaps.sort((a, b) => b.da - a.da).map(d => (
+                        <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${T.border}` }}>
+                          <span style={{ fontSize: 11, color: T.text }}>{d.domain}</span>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
+                            <Chip text="FIRST MOVER" color={T.teal} small />
+                          </div>
+                        </div>
+                      ))}
+                    </Panel>
+                  </div>
+
+                  <Label color={T.gold}>SIRION PRESENT — WRONG NARRATIVE</Label>
+                  <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>These domains have Sirion content but it reinforces the post-signature specialist perception.</p>
+                  {narGaps.map(d => (
+                    <Panel key={d.id} style={{ padding: "10px 14px", marginBottom: 6 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <span style={{ fontSize: 12, fontWeight: 700 }}>{d.domain}</span>
+                          <StatusBadge status={d.sirionStatus} />
+                        </div>
+                        <span style={{ fontSize: 11, fontFamily: T.m, color: T.dim }}>{d.category}</span>
+                      </div>
+                      <p style={{ fontSize: 11, color: T.gold, marginTop: 4, lineHeight: 1.4, fontStyle: "italic" }}>{d.narrativeGap}</p>
+                    </Panel>
+                  ))}
+                </>
+              );
+            })()}
           </>
         )}
 
         {/* ═══ TAB: OUTREACH PLAN ═══ */}
         {nav === "outreach" && (
           <>
+            {/* Insight Banner */}
+            <InsightBanner color={insights.outreach.done > 0 ? T.green : T.blue}
+              insight={<><span style={{ fontWeight: 800, color: T.green }}>{insights.outreach.done}</span> of {insights.outreach.totalTargets} target domains completed{insights.outreach.inProgress > 0 && <>, <span style={{ fontWeight: 800, color: T.blue }}>{insights.outreach.inProgress}</span> in progress</>}. <span style={{ fontWeight: 800, color: T.teal }}>{insights.outreach.quickWins}</span> quick wins available (easy difficulty or Fiverr-eligible).</>}
+              action={insights.outreach.done === 0
+                ? <>Start with quick wins to build momentum — easy domains like techrepublic.com, techtarget.com, and spiceworks.com can be closed in 1-2 weeks.</>
+                : <>{insights.outreach.totalTargets - insights.outreach.done} domains remaining. {insights.outreach.quickWins > 0 && <>Prioritize the {insights.outreach.quickWins} quick wins to accelerate coverage.</>}</>
+              }
+            />
+
+            {/* ── PROGRESS BAR ── */}
+            {(() => {
+              const allZ = DOMAINS.filter(d => d.sirionStatus === "verified_zero");
+              const done = allZ.filter(d => outreachTracker[d.id]?.status === "DONE").length;
+              const ip = allZ.filter(d => outreachTracker[d.id]?.status === "IN_PROGRESS").length;
+              const pct = allZ.length ? Math.round(((done + ip * 0.5) / allZ.length) * 100) : 0;
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: T.text, fontFamily: T.h }}>Outreach Progress</span>
+                    <span style={{ fontSize: 11, fontFamily: T.m, color: pct >= 50 ? T.green : pct >= 20 ? T.gold : T.dim }}>{pct}% coverage</span>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 4, background: T.border, overflow: "hidden" }}>
+                    <div style={{ height: "100%", borderRadius: 4, background: `linear-gradient(90deg, ${T.green}, ${T.teal})`, width: `${pct}%`, transition: "width 0.5s ease" }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                    <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>{done} done · {ip} in progress · {allZ.length - done - ip} remaining</span>
+                    <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>Target: 50% in 90 days</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── THIS MONTH'S FOCUS ── */}
+            {(() => {
+              const allZeros = DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore);
+              const notStarted = allZeros.filter(d => !outreachTracker[d.id]?.status || outreachTracker[d.id]?.status === "NOT_STARTED");
+              const quickWinFirst = [...notStarted].sort((a, b) => {
+                const diffOrder = { easy: 0, medium: 1, hard: 2, very_hard: 3 };
+                const da = (diffOrder[a.difficulty] || 2) - (diffOrder[b.difficulty] || 2);
+                return da !== 0 ? da : b.priorityScore - a.priorityScore;
+              });
+              const focusDomains = quickWinFirst.slice(0, 5);
+              const inProgress = allZeros.filter(d => outreachTracker[d.id]?.status === "IN_PROGRESS");
+              return focusDomains.length > 0 || inProgress.length > 0 ? (
+                <Panel glow={T.teal} style={{ padding: "14px 18px", marginBottom: 18 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 14, fontWeight: 800, fontFamily: T.h, color: T.teal }}>This Month's Focus</span>
+                    <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim, background: T.teal + "12", padding: "2px 8px", borderRadius: 10 }}>MARCH 2026</span>
+                  </div>
+                  {inProgress.length > 0 && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.blue, letterSpacing: "0.1em", marginBottom: 4, fontWeight: 700 }}>CONTINUE IN PROGRESS</div>
+                      {inProgress.map(d => (
+                        <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                          <span style={{ width: 6, height: 6, borderRadius: 3, background: T.blue, flexShrink: 0 }} />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: T.text }}>{d.domain}</span>
+                          <span style={{ fontSize: 10, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
+                          <span style={{ fontSize: 10, color: T.accent }}>{d.approach}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 9, fontFamily: T.m, color: T.teal, letterSpacing: "0.1em", marginBottom: 4, fontWeight: 700 }}>START NEXT ({Math.min(focusDomains.length, 5)} RECOMMENDED)</div>
+                  {focusDomains.map((d, i) => (
+                    <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: i < focusDomains.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 9, background: T.teal + "15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, fontFamily: T.m, color: T.teal, flexShrink: 0 }}>{i + 1}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: T.text, minWidth: 140 }}>{d.domain}</span>
+                      <span style={{ fontSize: 10, fontFamily: T.m, color: T.dim }}>DA {d.da}</span>
+                      <DifficultyBadge d={d.difficulty} />
+                      <span style={{ fontSize: 10, fontFamily: T.m, color: T.muted }}>${(d.estCostLow / 1000).toFixed(1)}K–${(d.estCostHigh / 1000).toFixed(1)}K</span>
+                      <span style={{ marginLeft: "auto", fontSize: 10, color: T.accent }}>{d.approach}</span>
+                    </div>
+                  ))}
+                </Panel>
+              ) : null;
+            })()}
+
+            {/* ── MONTHLY ROADMAP TIMELINE ── */}
+            {(() => {
+              const allZ = DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore);
+              const easy = allZ.filter(d => d.difficulty === "easy" || d.fiverr);
+              const medium = allZ.filter(d => d.difficulty === "medium" && !d.fiverr);
+              const hard = allZ.filter(d => d.difficulty === "hard" || d.difficulty === "very_hard");
+              const months = [
+                { label: "Month 1", sub: "Quick Wins", color: T.green, domains: easy.slice(0, 4) },
+                { label: "Month 2", sub: "Medium Targets", color: T.blue, domains: [...easy.slice(4), ...medium.slice(0, 3)] },
+                { label: "Month 3", sub: "Strategic Pushes", color: T.gold, domains: medium.slice(3) },
+                { label: "Month 4-6", sub: "High-Impact", color: T.red, domains: hard },
+              ].filter(m => m.domains.length > 0);
+              return (
+                <div style={{ marginBottom: 20 }}>
+                  <Label color={T.accent}>MONTHLY ROADMAP — PHASED EXECUTION</Label>
+                  <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Domains grouped by difficulty into monthly execution phases. Easy wins first, then escalate.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${months.length}, 1fr)`, gap: 10 }}>
+                    {months.map((m, mi) => (
+                      <div key={mi} style={{ background: T.surface, borderRadius: 8, border: `1px solid ${m.color}15`, overflow: "hidden" }}>
+                        <div style={{ padding: "8px 12px", background: m.color + "08", borderBottom: `1px solid ${m.color}15` }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, fontFamily: T.h, color: m.color }}>{m.label}</div>
+                          <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>{m.sub} · {m.domains.length} domains</div>
+                        </div>
+                        <div style={{ padding: "8px 12px" }}>
+                          {m.domains.map(d => {
+                            const st = outreachTracker[d.id]?.status || "NOT_STARTED";
+                            const stColor = st === "DONE" ? T.green : st === "IN_PROGRESS" ? T.blue : T.dim;
+                            return (
+                              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 0", borderBottom: `1px solid ${T.border}` }}>
+                                <span style={{ width: 5, height: 5, borderRadius: 3, background: stColor, flexShrink: 0 }} />
+                                <span style={{ fontSize: 10, color: T.text, flex: 1 }}>{d.domain}</span>
+                                <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>{d.da}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <Label color={T.accent}>OUTREACH PROJECT TRACKER</Label>
             <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Track outreach execution per domain. Status changes persist to Firebase automatically.</p>
 
@@ -1192,6 +1484,140 @@ export default function AuthorityRing() {
           const zeroDomains = DOMAINS.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore);
           return (
           <>
+            {/* Insight Banner */}
+            <InsightBanner color={T.gold}
+              insight={<>Top 5 priority gaps ({insights.cost.top5Gaps.map(d => d.domain).join(", ")}) would cost <span style={{ fontWeight: 800, color: T.teal }}>${(insights.cost.top5CostLow / 1000).toFixed(0)}K-${(insights.cost.top5CostHigh / 1000).toFixed(0)}K</span> in placement spend. These domains serve <span style={{ fontWeight: 800 }}>{insights.cost.top5Personas.length}</span> buyer personas ({insights.cost.top5Personas.join(", ")}).</>}
+              action={<>Recommended approach: start with quick wins ($0-$500 each) while negotiating high-impact placements. Monthly retainer of $4K-$6K covers research, monitoring, and strategy.</>}
+            />
+
+            {/* ── 90-DAY BUDGET RECOMMENDATION ── */}
+            {(() => {
+              const easyCount = zeroDomains.filter(d => d.difficulty === "easy" || d.fiverr).length;
+              const medCount = zeroDomains.filter(d => d.difficulty === "medium" && !d.fiverr).length;
+              const hardCount = zeroDomains.filter(d => d.difficulty === "hard" || d.difficulty === "very_hard").length;
+              const qw90Cost = zeroDomains.filter(d => d.difficulty === "easy" || d.fiverr).reduce((s, d) => s + (d.estCostHigh || 0), 0);
+              const med90Cost = zeroDomains.filter(d => d.difficulty === "medium" && !d.fiverr).slice(0, 3).reduce((s, d) => s + (d.estCostHigh || 0), 0);
+              const total90Low = Math.round((zeroDomains.filter(d => d.difficulty === "easy" || d.fiverr).reduce((s, d) => s + (d.estCostLow || 0), 0) + zeroDomains.filter(d => d.difficulty === "medium" && !d.fiverr).slice(0, 3).reduce((s, d) => s + (d.estCostLow || 0), 0)) / 1000);
+              const total90High = Math.round((qw90Cost + med90Cost) / 1000);
+              const retainer90 = 15; // $5K/mo * 3
+              return (
+                <Panel glow={T.teal} style={{ marginBottom: 18 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 9, fontFamily: T.m, letterSpacing: "0.12em", color: T.teal, fontWeight: 700 }}>RECOMMENDED 90-DAY BUDGET</span>
+                    <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>Based on difficulty distribution + quick-win priority</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.green }}>{easyCount}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>QUICK WINS</div>
+                      <div style={{ fontSize: 10, fontFamily: T.m, color: T.muted, marginTop: 1 }}>Month 1-2</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.gold }}>{Math.min(medCount, 3)}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>MEDIUM TARGETS</div>
+                      <div style={{ fontSize: 10, fontFamily: T.m, color: T.muted, marginTop: 1 }}>Month 2-3</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.accent }}>${total90Low}K-${total90High}K</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>PLACEMENT SPEND</div>
+                      <div style={{ fontSize: 10, fontFamily: T.m, color: T.muted, marginTop: 1 }}>90-day total</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.teal }}>${total90Low + retainer90}K-${total90High + retainer90}K</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>ALL-IN (incl. retainer)</div>
+                      <div style={{ fontSize: 10, fontFamily: T.m, color: T.muted, marginTop: 1 }}>+$5K/mo retainer</div>
+                    </div>
+                  </div>
+                </Panel>
+              );
+            })()}
+
+            {/* ── COST BY PRIORITY TIER — Horizontal Bar Chart ── */}
+            {(() => {
+              const tiers = [
+                { name: "Quick Wins", domains: zeroDomains.filter(d => d.difficulty === "easy" || d.fiverr), color: T.green },
+                { name: "Medium", domains: zeroDomains.filter(d => d.difficulty === "medium" && !d.fiverr), color: T.gold },
+                { name: "Hard", domains: zeroDomains.filter(d => d.difficulty === "hard"), color: T.orange },
+                { name: "Very Hard", domains: zeroDomains.filter(d => d.difficulty === "very_hard"), color: T.red },
+              ].filter(t => t.domains.length > 0).map(t => ({
+                name: t.name,
+                count: t.domains.length,
+                costLow: Math.round(t.domains.reduce((s, d) => s + (d.estCostLow || 0), 0) / 1000),
+                costHigh: Math.round(t.domains.reduce((s, d) => s + (d.estCostHigh || 0), 0) / 1000),
+                fill: t.color,
+                avgDA: Math.round(t.domains.reduce((s, d) => s + d.da, 0) / t.domains.length),
+              }));
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <Label color={T.dim}>COST DISTRIBUTION BY DIFFICULTY TIER</Label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                    <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.border}`, padding: "14px 16px" }}>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, letterSpacing: "0.1em", marginBottom: 10 }}>COST RANGE ($K)</div>
+                      <ResponsiveContainer width="100%" height={tiers.length * 44 + 10}>
+                        <BarChart data={tiers} layout="vertical" margin={{ top: 0, right: 10, bottom: 0, left: 60 }}>
+                          <XAxis type="number" tick={{ fill: T.dim, fontSize: 10, fontFamily: T.m }} axisLine={false} tickLine={false} />
+                          <YAxis type="category" dataKey="name" tick={{ fill: T.muted, fontSize: 10, fontFamily: T.m }} axisLine={false} tickLine={false} width={55} />
+                          <Tooltip contentStyle={tipStyle} formatter={(v, n) => [`$${v}K`, n === "costLow" ? "Low Est." : "High Est."]} />
+                          <Bar dataKey="costLow" fill={T.accent + "60"} radius={[0, 4, 4, 0]} barSize={14} name="Low Est." />
+                          <Bar dataKey="costHigh" fill={T.accent} radius={[0, 4, 4, 0]} barSize={14} name="High Est." />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div style={{ background: T.surface, borderRadius: 10, border: `1px solid ${T.border}`, padding: "14px 16px" }}>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, letterSpacing: "0.1em", marginBottom: 10 }}>DOMAINS PER TIER</div>
+                      <ResponsiveContainer width="100%" height={tiers.length * 44 + 10}>
+                        <BarChart data={tiers} layout="vertical" margin={{ top: 0, right: 10, bottom: 0, left: 60 }}>
+                          <XAxis type="number" tick={{ fill: T.dim, fontSize: 10, fontFamily: T.m }} axisLine={false} tickLine={false} allowDecimals={false} />
+                          <YAxis type="category" dataKey="name" tick={{ fill: T.muted, fontSize: 10, fontFamily: T.m }} axisLine={false} tickLine={false} width={55} />
+                          <Tooltip contentStyle={tipStyle} formatter={(v) => [v, "Domains"]} />
+                          <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={18}>
+                            {tiers.map((t, i) => <Cell key={i} fill={t.fill} />)}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── ROI PROJECTION ── */}
+            {(() => {
+              const top5 = insights.cost.top5Gaps;
+              const top5DA = top5.map(d => d.da);
+              const avgDA = top5DA.length ? Math.round(top5DA.reduce((a, b) => a + b, 0) / top5DA.length) : 0;
+              const visibilityBoost = Math.round(top5.length * 3.2); // ~3.2 pts per high-DA domain
+              const personasReached = insights.cost.top5Personas.length;
+              return (
+                <Panel glow={T.green} style={{ marginBottom: 18 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 9, fontFamily: T.m, letterSpacing: "0.12em", color: T.green, fontWeight: 700 }}>ROI PROJECTION — TOP 5 GAPS</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.green }}>+{visibilityBoost}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>EST. VISIBILITY PTS</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.accent }}>{personasReached}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>PERSONAS REACHED</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.teal }}>{avgDA}</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>AVG DOMAIN AUTH</div>
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, fontFamily: T.h, color: T.gold }}>${(insights.cost.top5CostLow / 1000).toFixed(0)}K-${(insights.cost.top5CostHigh / 1000).toFixed(0)}K</div>
+                      <div style={{ fontSize: 9, fontFamily: T.m, color: T.dim, marginTop: 2 }}>COST FOR TOP 5</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: 10, color: T.muted, fontFamily: T.m, lineHeight: 1.5 }}>
+                    Domains: {top5.map(d => d.domain).join(", ")}
+                  </div>
+                </Panel>
+              );
+            })()}
+
             <Label color={T.accent}>COST MODEL — XTRUSIO RETAINER vs OUTREACH SPEND</Label>
             <p style={{ fontSize: 11, color: T.muted, marginBottom: 16, lineHeight: 1.5 }}>
               Two separate line items: (1) Xtrusio software retainer for research, monitoring & strategy. (2) Actual outreach/placement spend per domain.
@@ -1282,25 +1708,39 @@ export default function AuthorityRing() {
                     <th style={{ ...cmThS, width: 44, textAlign: "center" }}>DA</th>
                     <th style={{ ...cmThS }}>CATEGORY</th>
                     <th style={{ ...cmThS }}>METHOD</th>
-                    <th style={{ ...cmThS, width: 120, textAlign: "right" }}>COST RANGE</th>
+                    <th style={{ ...cmThS, width: 110, textAlign: "right" }}>COST RANGE</th>
                     <th style={{ ...cmThS, width: 65, textAlign: "center" }}>DIFF</th>
+                    <th style={{ ...cmThS, width: 90, textAlign: "center" }}>ACTION</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {zeroDomains.map((d, idx) => (
+                  {zeroDomains.map((d, idx) => {
+                    const tracked = outreachTracker[d.id]?.status && outreachTracker[d.id].status !== "NOT_STARTED";
+                    return (
                     <tr key={d.id} style={{ background: idx % 2 === 0 ? "transparent" : T.bg + "80" }}>
                       <td style={{ ...cmTdS, textAlign: "center", fontFamily: T.h, fontWeight: 800, color: d.priorityScore >= 90 ? T.red : d.priorityScore >= 75 ? T.gold : T.dim }}>{d.priorityScore}</td>
                       <td style={{ ...cmTdS, fontWeight: 600, color: T.text }}>
                         {d.domain}
-                        {d.fiverrFriendly && <span style={{ marginLeft: 6, fontSize: 8, padding: "1px 5px", borderRadius: 3, background: T.green + "22", color: T.green, fontFamily: T.m, fontWeight: 700 }}>FIVERR</span>}
+                        {d.fiverr && <span style={{ marginLeft: 6, fontSize: 8, padding: "1px 5px", borderRadius: 3, background: T.green + "22", color: T.green, fontFamily: T.m, fontWeight: 700 }}>FIVERR</span>}
                       </td>
                       <td style={{ ...cmTdS, textAlign: "center", fontFamily: T.m, fontWeight: 600, color: d.da >= 85 ? T.green : T.muted }}>{d.da}</td>
                       <td style={{ ...cmTdS, fontSize: 10, color: T.muted }}>{d.category}</td>
                       <td style={{ ...cmTdS, fontSize: 10, color: T.accent }}>{d.approach || "--"}</td>
                       <td style={{ ...cmTdS, textAlign: "right", fontFamily: T.m, fontWeight: 600, color: T.text }}>${(d.estCostLow / 1000).toFixed(1)}K–${(d.estCostHigh / 1000).toFixed(1)}K</td>
                       <td style={{ ...cmTdS, textAlign: "center" }}><DifficultyBadge d={d.difficulty} /></td>
+                      <td style={{ ...cmTdS, textAlign: "center" }}>
+                        {tracked ? (
+                          <span style={{ fontSize: 9, fontFamily: T.m, color: T.green, fontWeight: 700 }}>TRACKED</span>
+                        ) : (
+                          <button onClick={() => { setNav("outreach"); setOutreachFilter("all"); }}
+                            style={{ fontSize: 9, fontFamily: T.m, fontWeight: 700, color: T.accent, background: T.accentDim, border: `1px solid ${T.borderActive}`, borderRadius: 5, padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            Add to Outreach
+                          </button>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1311,8 +1751,16 @@ export default function AuthorityRing() {
         {/* ═══ TAB: PERSONA MAP ═══ */}
         {nav === "persona" && (
           <>
+            {/* Insight Banner */}
+            {insights.persona.weakest && insights.persona.strongest && (
+              <InsightBanner color={T.accent}
+                insight={<><span style={{ fontWeight: 800, color: insights.persona.strongest.color }}>{insights.persona.strongest.id}</span> coverage is {insights.persona.strongest.pct}% (strongest). <span style={{ fontWeight: 800, color: T.red }}>{insights.persona.weakest.id}</span> coverage is only {insights.persona.weakest.pct}% — {insights.persona.weakest.present}/{insights.persona.weakest.total} domains covered.</>}
+                action={<>Prioritize {insights.persona.weakest.label}-relevant domains{insights.persona.weakest.topUncovered.length > 0 && <>: {insights.persona.weakest.topUncovered.map((d, i) => <span key={d.id}>{i > 0 && ", "}<span style={{ color: T.text }}>{d.domain}</span> (DA {d.da})</span>)}</>} to improve the weakest persona coverage.</>}
+              />
+            )}
+
             <Label color={T.accent}>BUYER PERSONA → DOMAIN INFLUENCE MAP</Label>
-            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16 }}>Which domains matter most for each decision-maker. Coverage = % of persona-relevant domains where Sirion has presence.</p>
+            <p style={{ fontSize: 11, color: T.muted, marginBottom: 16 }}>Which domains matter most for each decision-maker. Coverage = % of persona-relevant domains where Sirion has presence. Target: 50%.</p>
 
             {/* Summary Grid */}
             <div style={{ display: "grid", gridTemplateColumns: `repeat(${PERSONAS.length}, 1fr)`, gap: 10, marginBottom: 20 }}>
@@ -1320,20 +1768,69 @@ export default function AuthorityRing() {
                 const doms = DOMAINS.filter(d => d.buyerPersonas?.includes(p.id));
                 const present = doms.filter(d => d.sirionStatus !== "verified_zero").length;
                 const pct = doms.length ? Math.round((present / doms.length) * 100) : 0;
+                const targetPct = 50;
+                const topUncovered = doms.filter(d => d.sirionStatus === "verified_zero").sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 2);
                 return (
                   <Panel key={p.id} glow={p.color} style={{ padding: "12px 14px", textAlign: "center" }}>
                     <div style={{ fontSize: 16, marginBottom: 4 }}>{p.icon}</div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: p.color, fontFamily: T.h, marginBottom: 2 }}>{p.id}</div>
                     <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginBottom: 8 }}>{p.label}</div>
                     <div style={{ fontSize: 22, fontWeight: 900, fontFamily: T.h, color: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red }}>{pct}%</div>
-                    <div style={{ height: 4, borderRadius: 2, background: T.border, marginTop: 6, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, borderRadius: 2, background: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red, transition: "width 0.3s" }} />
+                    {/* Progress bar with 50% target marker */}
+                    <div style={{ height: 4, borderRadius: 2, background: T.border, marginTop: 6, overflow: "visible", position: "relative" }}>
+                      <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, borderRadius: 2, background: pct >= 60 ? T.green : pct >= 30 ? T.gold : T.red, transition: "width 0.3s" }} />
+                      <div style={{ position: "absolute", left: `${targetPct}%`, top: -2, width: 1, height: 8, background: T.text, opacity: 0.5 }} />
+                      <div style={{ position: "absolute", left: `${targetPct}%`, top: -10, transform: "translateX(-50%)", fontSize: 7, fontFamily: T.m, color: T.dim }}>50%</div>
                     </div>
-                    <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 4 }}>{present}/{doms.length} domains covered</div>
+                    <div style={{ fontSize: 9, color: T.dim, fontFamily: T.m, marginTop: 6 }}>{present}/{doms.length} covered</div>
+                    {/* Top action */}
+                    {topUncovered.length > 0 && (
+                      <div style={{ marginTop: 8, padding: "5px 6px", borderRadius: 5, background: T.bg, border: `1px solid ${T.border}`, fontSize: 9, color: T.muted, lineHeight: 1.3, textAlign: "left" }}>
+                        Publish on <span style={{ color: T.text, fontWeight: 600 }}>{topUncovered.map(d => d.domain).join(", ")}</span> to reach {Math.round(((present + topUncovered.length) / doms.length) * 100)}%
+                      </div>
+                    )}
                   </Panel>
                 );
               })}
             </div>
+
+            {/* ── CROSS-PERSONA PRIORITY — Domains serving multiple personas ── */}
+            {(() => {
+              const multiPersonaDomains = DOMAINS
+                .filter(d => d.sirionStatus === "verified_zero" && d.buyerPersonas && d.buyerPersonas.length >= 2)
+                .sort((a, b) => b.buyerPersonas.length - a.buyerPersonas.length || b.priorityScore - a.priorityScore);
+              if (multiPersonaDomains.length === 0) return null;
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <Label color={T.teal}>CROSS-PERSONA PRIORITY — HIGHEST ROI DOMAINS</Label>
+                  <p style={{ fontSize: 10, color: T.dim, marginBottom: 8 }}>Zero-presence domains that serve 2+ personas. Closing these gaps gives the most coverage per dollar spent.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+                    {multiPersonaDomains.slice(0, 6).map(d => (
+                      <Panel key={d.id} glow={T.teal} style={{ padding: "12px 14px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: T.text, fontFamily: T.h }}>{d.domain}</span>
+                          <span style={{ fontSize: 10, fontFamily: T.m, color: T.dim }}>DA {d.da} · Score {d.priorityScore}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                          {d.buyerPersonas.map(pid => {
+                            const persona = PERSONAS.find(p => p.id === pid);
+                            return <Chip key={pid} text={pid} color={persona?.color || T.accent} small />;
+                          })}
+                        </div>
+                        <div style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>{d.approach}</div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 9, fontFamily: T.m, color: T.dim }}>${(d.estCostLow / 1000).toFixed(1)}K-${(d.estCostHigh / 1000).toFixed(1)}K · <DifficultyBadge d={d.difficulty} /></span>
+                          <button onClick={() => { setNav("outreach"); setOutreachFilter("all"); }}
+                            style={{ fontSize: 9, fontFamily: T.m, fontWeight: 700, color: T.teal, background: T.teal + "12", border: `1px solid ${T.teal}25`, borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>
+                            Close Gap
+                          </button>
+                        </div>
+                      </Panel>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Per-Persona Domain Tables */}
             {PERSONAS.map(p => {

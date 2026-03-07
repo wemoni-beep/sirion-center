@@ -2917,6 +2917,106 @@
         "volumeTier": "medium",
         "criterion": "pd.supplier_contract_compliance",
         "enrichedAt": "2026-03-01T19:54:00.906Z"
+      },
+      {
+        "id": "bm-1",
+        "query": "How to reduce contract cycle time in enterprise",
+        "persona": "cpo",
+        "lifecycle": "pre-signature",
+        "stage": "awareness",
+        "cluster": "Contract AI / Automation",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-2",
+        "query": "Why do companies lose money on contract renewals",
+        "persona": "cfo",
+        "lifecycle": "post-signature",
+        "stage": "awareness",
+        "cluster": "Post-Signature / Obligations",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-3",
+        "query": "How to track contract obligations automatically",
+        "persona": "gc",
+        "lifecycle": "post-signature",
+        "stage": "discovery",
+        "cluster": "Post-Signature / Obligations",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-4",
+        "query": "What is CLM software",
+        "persona": "ceo",
+        "lifecycle": "full-stack",
+        "stage": "awareness",
+        "cluster": "CLM Platform Selection",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-5",
+        "query": "Best CLM platform for enterprise 2026",
+        "persona": "cio",
+        "lifecycle": "full-stack",
+        "stage": "discovery",
+        "cluster": "CLM Platform Selection",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-6",
+        "query": "AI-powered contract management software",
+        "persona": "cto",
+        "lifecycle": "full-stack",
+        "stage": "discovery",
+        "cluster": "Contract AI / Automation",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-7",
+        "query": "Sirion vs Icertis which is better",
+        "persona": "cpo",
+        "lifecycle": "full-stack",
+        "stage": "consideration",
+        "cluster": "CLM Platform Selection",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-8",
+        "query": "Ironclad vs Sirion comparison",
+        "persona": "gc",
+        "lifecycle": "full-stack",
+        "stage": "consideration",
+        "cluster": "CLM Platform Selection",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-9",
+        "query": "Best CLM for procurement teams",
+        "persona": "vplo",
+        "lifecycle": "pre-signature",
+        "stage": "discovery",
+        "cluster": "Procurement CLM",
+        "source": "benchmark",
+        "classification": "macro"
+      },
+      {
+        "id": "bm-10",
+        "query": "Contract management for pharmaceutical",
+        "persona": "gc",
+        "lifecycle": "full-stack",
+        "stage": "awareness",
+        "cluster": "CLM Platform Selection",
+        "source": "benchmark",
+        "classification": "macro"
       }
     ],
     "personas": [

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from "recharts";
 import { useTheme } from "./ThemeContext";
 import { db } from "./firebase.js";
@@ -6,6 +6,7 @@ import { usePipeline } from "./PipelineContext";
 import { callClaude, callClaudeFast } from "./claudeApi.js";
 import { updatePersona } from "./questionDB.js";
 import { FONT, GOOGLE_FONTS_URL } from "./typography";
+import { detectBucketFromSignals, getBucketById, TECH_BUCKETS, PAIN_CATEGORIES } from "./data/yinMatrix.js";
 
 /* ═══════════════════════════════════════════
    FIREBASE — imported from shared firebase.js
@@ -418,12 +419,17 @@ function LoadingState({ steps, step, title }) {
    ANALYSIS VIEW — Visual Charts + Credibility + Verification + PDF
    ═══════════════════════════════════════════ */
 
-function AnalysisView({ data, verification, verifying, verificationError, onVerify, m1Questions = [] }) {
+function AnalysisView({ data, verification, verifying, verificationError, onVerify, m1Questions = [], companyBuckets = {} }) {
   if (!data) return null;
   const printRef = useRef(null);
   const primary = STAGE_CONFIG[data.primary_stage] || STAGE_CONFIG.awareness;
   const dm = data.decision_maker || {};
   const co = data.company_profile || {};
+
+  // CLM Maturity bucket detection
+  const companyName = dm.company || "";
+  const bucketData = companyBuckets[companyName] || null;
+  const bucket = bucketData ? getBucketById(bucketData.bucketId) : null;
 
   const dimKeys = [
     { key: "tech_stack", label: "Tech Stack", short: "Tech", color: VT.purple },
@@ -470,6 +476,27 @@ function AnalysisView({ data, verification, verifying, verificationError, onVeri
               {co.employee_count && <span>👥 {co.employee_count}</span>}
               {co.global_presence && <span>🌍 {co.global_presence.split(",")[0]}</span>}
             </div>
+            {/* CLM Maturity Badge */}
+            {bucket && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "5px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                  fontFamily: VT.heading, letterSpacing: "0.03em",
+                  background: bucket.severity >= 7 ? `${VT.red}15` : bucket.severity >= 4 ? `${VT.gold}15` : `${VT.green}15`,
+                  color: bucket.severity >= 7 ? VT.red : bucket.severity >= 4 ? VT.gold : VT.green,
+                  border: `1px solid ${bucket.severity >= 7 ? VT.red : bucket.severity >= 4 ? VT.gold : VT.green}30`,
+                }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor" }} />
+                  CLM Maturity: {bucket.name}
+                </span>
+                {bucketData.confidence < 0.5 && (
+                  <span style={{
+                    fontSize: 10, color: VT.textDim, fontStyle: "italic",
+                  }} title="Add more profiles to improve detection">Unconfirmed</span>
+                )}
+              </div>
+            )}
           </div>
           <div style={{ textAlign: "center" }}>
             <svg width={120} height={120}>
@@ -486,12 +513,13 @@ function AnalysisView({ data, verification, verifying, verificationError, onVeri
       </div>
 
       {/* ═══ METRICS ═══ */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 }}>
         {[
           { v: (data.readiness_score||0).toFixed(1), l: "Readiness Score", s: "out of 10.0", c: primary.color },
           { v: primary.label, l: "Primary Stage", s: `Score: ${stageData.find(s=>s.name.toLowerCase()===data.primary_stage)?.score||0}/10`, c: primary.color },
           { v: (data.confidence||"medium").toUpperCase(), l: "Confidence", s: "signal density", c: VT.green },
-          { v: allSignals.length, l: "Total Signals", s: "5 dimensions", c: VT.purple }
+          { v: allSignals.length, l: "Total Signals", s: "5 dimensions", c: VT.purple },
+          { v: bucket ? (bucket.severity >= 7 ? "HIGH" : bucket.severity >= 4 ? "MED" : "LOW") : "N/A", l: "Sirion Fit", s: bucket ? bucket.sirionFit : "no data", c: bucket?.sirionFit === "high" ? VT.green : bucket?.sirionFit === "medium" ? VT.gold : VT.red }
         ].map((m,i) => (
           <div key={i} style={{ padding: "16px 14px", borderRadius: 12, background: VT.card, border: `1px solid ${VT.border}`, position: "relative", overflow: "hidden" }}>
             <Glow color={m.c} size={80} top={-40} right={-40} opacity={0.08} />
@@ -550,6 +578,61 @@ function AnalysisView({ data, verification, verifying, verificationError, onVeri
           {allSignals.map((s,i) => <VChip key={i} text={s} color={dimKeys[i % dimKeys.length].color} />)}
         </div>
       </Panel>
+
+      {/* ═══ CLM MATURITY ASSESSMENT ═══ */}
+      {bucket && (
+        <Panel style={{ borderLeft: `3px solid ${bucket.severity >= 7 ? VT.red : bucket.severity >= 4 ? VT.gold : VT.green}` }}>
+          <VLabel color={bucket.severity >= 7 ? VT.red : bucket.severity >= 4 ? VT.gold : VT.green}>CLM MATURITY ASSESSMENT</VLabel>
+          <div style={{ display: "flex", gap: 20 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <span style={{
+                  fontSize: 16, fontWeight: 800, fontFamily: VT.heading, color: VT.text,
+                }}>{bucket.name}</span>
+                <span style={{
+                  padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700,
+                  fontFamily: VT.mono,
+                  background: bucket.sirionFit === "high" ? `${VT.green}15` : bucket.sirionFit === "medium" ? `${VT.gold}15` : `${VT.red}15`,
+                  color: bucket.sirionFit === "high" ? VT.green : bucket.sirionFit === "medium" ? VT.gold : VT.red,
+                  border: `1px solid ${bucket.sirionFit === "high" ? VT.green : bucket.sirionFit === "medium" ? VT.gold : VT.red}25`,
+                }}>Sirion Fit: {bucket.sirionFit}</span>
+                {bucketData.confidence > 0 && (
+                  <span style={{ fontSize: 10, color: VT.textDim, fontFamily: VT.mono }}>
+                    {Math.round(bucketData.confidence * 100)}% confidence
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: VT.textMuted, lineHeight: 1.6, marginBottom: 10 }}>{bucket.description}</div>
+              <div style={{ fontSize: 12, color: VT.textMuted, lineHeight: 1.6, padding: "8px 12px", borderRadius: 8, background: `${VT.teal}08`, border: `1px solid ${VT.teal}15` }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: VT.teal, display: "block", marginBottom: 4 }}>ATTACK ANGLE</span>
+                {bucket.attackAngle}
+              </div>
+            </div>
+            <div style={{ minWidth: 160, textAlign: "center" }}>
+              <div style={{ marginBottom: 8 }}>
+                <svg width={80} height={80}>
+                  <circle cx={40} cy={40} r={32} fill="none" stroke={VT.border} strokeWidth="6" />
+                  <circle cx={40} cy={40} r={32} fill="none"
+                    stroke={bucket.severity >= 7 ? VT.red : bucket.severity >= 4 ? VT.gold : VT.green}
+                    strokeWidth="6" strokeDasharray={2*Math.PI*32}
+                    strokeDashoffset={2*Math.PI*32*(1-bucket.severity/10)}
+                    strokeLinecap="round" transform="rotate(-90 40 40)"
+                    style={{ transition: "stroke-dashoffset 1.2s ease" }} />
+                  <text x={40} y={44} textAnchor="middle" fill={VT.text} fontSize="22" fontWeight="800" fontFamily={VT.heading}>{bucket.severity}</text>
+                </svg>
+              </div>
+              <div style={{ fontSize: 10, color: VT.textDim, fontWeight: 700, letterSpacing: "0.08em" }}>PAIN SEVERITY</div>
+              {bucketData.detectedSignals?.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, justifyContent: "center", marginTop: 8 }}>
+                  {bucketData.detectedSignals.slice(0, 5).map((s, i) => (
+                    <span key={i} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 8, background: `${VT.teal}12`, color: VT.teal, fontFamily: VT.mono }}>{s}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </Panel>
+      )}
 
       {/* ═══ DM INTELLIGENCE ═══ */}
       <Panel>
@@ -957,6 +1040,386 @@ function OutreachView({ outreach, analysisData }) {
    HISTORY VIEW
    ═══════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════
+   ACCOUNTS VIEW — Company-Level Intelligence Dashboard
+   Groups analyses by company, shows buying committee composition,
+   CLM maturity bucket, readiness scores, and Yin Matrix link.
+   ═══════════════════════════════════════════ */
+
+function AccountsView({ analyses = [], companyBuckets = {}, history = [], onSelectCompany, onViewMatrix }) {
+  const [sortBy, setSortBy] = useState("readiness"); // readiness | recent | alphabetical
+  const [expandedAcct, setExpandedAcct] = useState(null);
+
+  // Group analyses by company name (normalized)
+  const accounts = useMemo(() => {
+    const map = {};
+    // From pipeline analyses
+    for (const a of analyses) {
+      const co = (a.company || "Unknown").trim();
+      if (!map[co]) map[co] = { company: co, profiles: [], latestAt: null };
+      map[co].profiles.push(a);
+      const t = a.analyzedAt ? new Date(a.analyzedAt).getTime() : 0;
+      if (!map[co].latestAt || t > map[co].latestAt) map[co].latestAt = t;
+    }
+    // Also check history for any additional companies not in pipeline analyses
+    for (const h of history) {
+      const co = (h.data?.decision_maker?.company || "").trim();
+      if (!co || co === "Unknown") continue;
+      if (!map[co]) map[co] = { company: co, profiles: [], latestAt: null };
+      // Add from history only if not already tracked
+      const name = h.data?.decision_maker?.name || "";
+      const already = map[co].profiles.some(p => p.person === name);
+      if (!already && name) {
+        map[co].profiles.push({
+          person: name,
+          company: co,
+          title: h.data?.decision_maker?.title || "",
+          stage: h.data?.primary_stage || "",
+          readiness: h.data?.readiness_score || 0,
+          analyzedAt: h.timestamp instanceof Date ? h.timestamp.toISOString() : (h.timestamp || ""),
+        });
+        const t = h.timestamp instanceof Date ? h.timestamp.getTime() : 0;
+        if (!map[co].latestAt || t > map[co].latestAt) map[co].latestAt = t;
+      }
+    }
+
+    // Enrich each account
+    return Object.values(map).map(acct => {
+      const bucket = companyBuckets[acct.company] || null;
+      const bucketInfo = bucket ? getBucketById(bucket.bucketId) : null;
+      const avgReadiness = acct.profiles.length > 0
+        ? acct.profiles.reduce((sum, p) => sum + (p.readiness || 0), 0) / acct.profiles.length
+        : 0;
+      // Unique persona titles (for committee composition)
+      const roles = [...new Set(acct.profiles.map(p => p.title).filter(Boolean))];
+      // Stage distribution
+      const stages = {};
+      for (const p of acct.profiles) {
+        const s = p.stage || "unknown";
+        stages[s] = (stages[s] || 0) + 1;
+      }
+      // Dominant stage
+      const dominantStage = Object.entries(stages).sort((a, b) => b[1] - a[1])[0]?.[0] || "unknown";
+      return {
+        ...acct,
+        bucket, bucketInfo,
+        avgReadiness,
+        roles,
+        stages,
+        dominantStage,
+        profileCount: acct.profiles.length,
+      };
+    });
+  }, [analyses, history, companyBuckets]);
+
+  // Sort
+  const sorted = useMemo(() => {
+    const list = [...accounts];
+    if (sortBy === "readiness") list.sort((a, b) => b.avgReadiness - a.avgReadiness);
+    else if (sortBy === "recent") list.sort((a, b) => (b.latestAt || 0) - (a.latestAt || 0));
+    else list.sort((a, b) => a.company.localeCompare(b.company));
+    return list;
+  }, [accounts, sortBy]);
+
+  // Summary stats
+  const totalAccounts = sorted.length;
+  const totalProfiles = sorted.reduce((s, a) => s + a.profileCount, 0);
+  const hotAccounts = sorted.filter(a => a.avgReadiness >= 7).length;
+  const warmAccounts = sorted.filter(a => a.avgReadiness >= 4 && a.avgReadiness < 7).length;
+
+  // Readiness status helper
+  const readinessStatus = (score) => {
+    if (score >= 7) return { label: "Ready to Engage", color: "#10B981", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.25)" };
+    if (score >= 4) return { label: "Needs Nurturing", color: "#F59E0B", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.25)" };
+    return { label: "Too Early", color: "#6B7280", bg: "rgba(107,114,128,0.10)", border: "rgba(107,114,128,0.25)" };
+  };
+
+  if (!sorted.length) {
+    return (
+      <div style={{ animation: "fadeUp 0.4s ease", textAlign: "center", padding: "60px 20px" }}>
+        <div style={{ fontSize: 40, marginBottom: 14, opacity: 0.4 }}>🏢</div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: VT.text, marginBottom: 8 }}>No Accounts Yet</div>
+        <div style={{ fontSize: 13, color: VT.textMuted, maxWidth: 400, margin: "0 auto", lineHeight: 1.6 }}>
+          Analyze decision makers to build your account intelligence. Each analysis automatically groups by company.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ animation: "fadeUp 0.4s ease" }}>
+      {/* ═══ SUMMARY STATS ═══ */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 20 }}>
+        {[
+          { label: "Total Accounts", value: totalAccounts, color: VT.teal },
+          { label: "Profiles Analyzed", value: totalProfiles, color: VT.blue },
+          { label: "Hot (Ready)", value: hotAccounts, color: "#10B981" },
+          { label: "Warm (Nurture)", value: warmAccounts, color: "#F59E0B" },
+        ].map((stat, i) => (
+          <div key={i} style={{
+            background: VT.card, borderRadius: 12, border: `1px solid ${VT.border}`,
+            padding: "14px 16px", textAlign: "center"
+          }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: stat.color, fontFamily: FONT.heading }}>{stat.value}</div>
+            <div style={{ fontSize: 10, color: VT.textDim, letterSpacing: "0.08em", fontWeight: 600, marginTop: 4, textTransform: "uppercase" }}>{stat.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ═══ SORT BAR ═══ */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <SectionTitle sub={`${totalAccounts} companies with ${totalProfiles} analyzed profiles`}>Account Intelligence</SectionTitle>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { id: "readiness", label: "Hottest First" },
+            { id: "recent", label: "Recent" },
+            { id: "alphabetical", label: "A-Z" },
+          ].map(s => (
+            <button key={s.id} onClick={() => setSortBy(s.id)} style={{
+              padding: "4px 10px", borderRadius: 6, border: `1px solid ${sortBy === s.id ? VT.teal + "40" : VT.border}`,
+              background: sortBy === s.id ? VT.teal + "12" : "transparent",
+              color: sortBy === s.id ? VT.teal : VT.textDim,
+              fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: FONT.body
+            }}>{s.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ ACCOUNT CARDS ═══ */}
+      {sorted.map((acct, idx) => {
+        const rs = readinessStatus(acct.avgReadiness);
+        const stageConf = STAGE_CONFIG[acct.dominantStage] || STAGE_CONFIG.awareness;
+        const expanded = expandedAcct === acct.company;
+        const severityColor = acct.bucketInfo
+          ? (acct.bucketInfo.severity >= 7 ? VT.red : acct.bucketInfo.severity >= 4 ? VT.gold : VT.green)
+          : VT.textDim;
+
+        return (
+          <div key={acct.company} style={{
+            background: VT.card, borderRadius: 14, border: `1px solid ${VT.border}`,
+            marginBottom: 10, overflow: "hidden",
+            boxShadow: expanded ? "0 4px 24px rgba(0,0,0,0.15)" : "none",
+            transition: "box-shadow 0.3s"
+          }}>
+            {/* ═══ CARD HEADER ═══ */}
+            <button onClick={() => setExpandedAcct(expanded ? null : acct.company)} style={{
+              width: "100%", textAlign: "left", background: "transparent",
+              border: "none", padding: "16px 18px", cursor: "pointer",
+              fontFamily: FONT.body, color: VT.text, display: "block"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {/* Company name */}
+                    <span style={{ fontSize: 15, fontWeight: 700, color: VT.text }}>{acct.company}</span>
+                    {/* Profile count badge */}
+                    <span style={{
+                      fontSize: 10, padding: "2px 8px", borderRadius: 10,
+                      background: VT.teal + "12", color: VT.teal,
+                      fontWeight: 700, fontFamily: FONT.mono
+                    }}>{acct.profileCount} {acct.profileCount === 1 ? "profile" : "profiles"}</span>
+                    {/* Stage badge */}
+                    <span style={{
+                      fontSize: 10, padding: "2px 8px", borderRadius: 10,
+                      background: stageConf.bg, color: stageConf.color,
+                      border: `1px solid ${stageConf.border}`, fontWeight: 700
+                    }}>{stageConf.label}</span>
+                    {/* CLM Maturity badge */}
+                    {acct.bucketInfo && (
+                      <span style={{
+                        fontSize: 10, padding: "2px 8px", borderRadius: 10,
+                        background: severityColor + "12", color: severityColor,
+                        border: `1px solid ${severityColor}25`, fontWeight: 700
+                      }}>{acct.bucketInfo.name}</span>
+                    )}
+                  </div>
+                  {/* Roles line */}
+                  <div style={{ fontSize: 11, color: VT.textDim, marginTop: 6, lineHeight: 1.5 }}>
+                    {acct.roles.slice(0, 4).join(" · ")}{acct.roles.length > 4 ? ` +${acct.roles.length - 4} more` : ""}
+                  </div>
+                </div>
+
+                {/* Right side: readiness score + status */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginLeft: 16 }}>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: rs.color, fontFamily: FONT.heading, lineHeight: 1 }}>{acct.avgReadiness.toFixed(1)}</div>
+                    <div style={{ fontSize: 10, color: VT.textDim, marginTop: 2 }}>avg readiness</div>
+                  </div>
+                  <span style={{
+                    padding: "4px 10px", borderRadius: 14, fontSize: 10, fontWeight: 700,
+                    background: rs.bg, color: rs.color, border: `1px solid ${rs.border}`,
+                    whiteSpace: "nowrap"
+                  }}>{rs.label}</span>
+                  <span style={{
+                    fontSize: 14, color: VT.textDim,
+                    transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+                    transition: "transform 0.2s", display: "inline-block"
+                  }}>{"\u25BE"}</span>
+                </div>
+              </div>
+
+              {/* Readiness bar */}
+              <div style={{ marginTop: 10 }}>
+                <div style={{ width: "100%", height: 4, background: VT.border, borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{
+                    width: `${(acct.avgReadiness / 10) * 100}%`, height: "100%",
+                    background: `linear-gradient(90deg, ${rs.color}80, ${rs.color})`,
+                    borderRadius: 2, transition: "width 0.8s ease"
+                  }} />
+                </div>
+              </div>
+            </button>
+
+            {/* ═══ EXPANDED DETAIL ═══ */}
+            {expanded && (
+              <div style={{
+                borderTop: `1px solid ${VT.border}`, padding: "16px 18px",
+                animation: "fadeUp 0.3s ease"
+              }}>
+                {/* CLM Maturity Detail */}
+                {acct.bucket && acct.bucketInfo && (
+                  <div style={{
+                    padding: "12px 16px", borderRadius: 10, marginBottom: 14,
+                    background: severityColor + "06",
+                    borderLeft: `3px solid ${severityColor}`,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: VT.text }}>CLM Maturity: {acct.bucketInfo.name}</span>
+                        <span style={{
+                          fontSize: 10, padding: "1px 7px", borderRadius: 8,
+                          background: acct.bucketInfo.sirionFit === "high" ? "#10B98115" : acct.bucketInfo.sirionFit === "medium" ? "#F59E0B15" : "#6B728015",
+                          color: acct.bucketInfo.sirionFit === "high" ? "#10B981" : acct.bucketInfo.sirionFit === "medium" ? "#F59E0B" : "#6B7280",
+                          fontWeight: 700
+                        }}>Sirion Fit: {acct.bucketInfo.sirionFit}</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: VT.textDim }}>
+                        Confidence: {((acct.bucket.confidence || 0) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: VT.textMuted, lineHeight: 1.5 }}>{acct.bucketInfo.description}</div>
+                    {acct.bucketInfo.attackAngle && (
+                      <div style={{ fontSize: 11, color: VT.teal, marginTop: 6, fontStyle: "italic" }}>
+                        Attack angle: {acct.bucketInfo.attackAngle}
+                      </div>
+                    )}
+                    {acct.bucket.detectedSignals?.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+                        {acct.bucket.detectedSignals.slice(0, 8).map((sig, si) => (
+                          <span key={si} style={{
+                            fontSize: 10, padding: "2px 7px", borderRadius: 6,
+                            background: VT.surface, color: VT.textMuted,
+                            border: `1px solid ${VT.border}`, fontFamily: FONT.mono
+                          }}>{sig}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Buying Committee */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, color: VT.textDim, letterSpacing: "0.1em", fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>
+                    Buying Committee ({acct.profileCount})
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                    {acct.profiles.map((p, pi) => {
+                      const ps = STAGE_CONFIG[p.stage] || STAGE_CONFIG.awareness;
+                      const pr = readinessStatus(p.readiness || 0);
+                      return (
+                        <div key={pi} style={{
+                          padding: "10px 12px", borderRadius: 8,
+                          background: VT.surface, border: `1px solid ${VT.border}`,
+                          display: "flex", alignItems: "center", justifyContent: "space-between"
+                        }}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: VT.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.person || "Unknown"}</div>
+                            <div style={{ fontSize: 10, color: VT.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || "No title"}</div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 8 }}>
+                            <span style={{
+                              fontSize: 9, padding: "1px 6px", borderRadius: 6,
+                              background: ps.bg, color: ps.color, fontWeight: 700
+                            }}>{ps.label.slice(0, 5)}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: pr.color, fontFamily: FONT.mono }}>{(p.readiness || 0).toFixed(1)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Stage Distribution */}
+                {Object.keys(acct.stages).length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: VT.textDim, letterSpacing: "0.1em", fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>
+                      Stage Distribution
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {Object.entries(acct.stages).map(([stage, count]) => {
+                        const sc = STAGE_CONFIG[stage] || { label: stage, color: "#6B7280", bg: "rgba(107,114,128,0.1)", border: "rgba(107,114,128,0.25)" };
+                        const pct = ((count / acct.profileCount) * 100).toFixed(0);
+                        return (
+                          <div key={stage} style={{
+                            flex: 1, padding: "8px 10px", borderRadius: 8,
+                            background: sc.bg, border: `1px solid ${sc.border}`,
+                            textAlign: "center"
+                          }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: sc.color, fontFamily: FONT.heading }}>{count}</div>
+                            <div style={{ fontSize: 10, color: sc.color, fontWeight: 600, marginTop: 2 }}>{sc.label}</div>
+                            <div style={{ fontSize: 9, color: VT.textDim, marginTop: 2 }}>{pct}%</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  {onViewMatrix && (
+                    <button onClick={() => onViewMatrix(acct.company)} style={{
+                      flex: 1, padding: "10px 14px", borderRadius: 8, border: "none",
+                      background: "linear-gradient(135deg, #14B8A6, #0D9488)",
+                      color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      fontFamily: FONT.body, letterSpacing: "0.02em"
+                    }}>View Yin Matrix</button>
+                  )}
+                  {onSelectCompany && (
+                    <button onClick={() => onSelectCompany(acct.company)} style={{
+                      flex: 1, padding: "10px 14px", borderRadius: 8,
+                      border: `1px solid ${VT.teal}30`,
+                      background: VT.teal + "08",
+                      color: VT.teal, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      fontFamily: FONT.body
+                    }}>View All Analyses</button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* ═══ INSIGHT BANNER ═══ */}
+      {hotAccounts > 0 && (
+        <div style={{
+          marginTop: 16, padding: "14px 18px", borderRadius: 12,
+          background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
+          borderLeft: "3px solid #10B981"
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#10B981", marginBottom: 4 }}>Recommended Action</div>
+          <div style={{ fontSize: 12, color: VT.textMuted, lineHeight: 1.6 }}>
+            {hotAccounts} account{hotAccounts > 1 ? "s" : ""} {hotAccounts > 1 ? "are" : "is"} ready to engage (readiness {"\u2265"} 7.0).
+            {" "}Focus outreach on {sorted.filter(a => a.avgReadiness >= 7).slice(0, 3).map(a => a.company).join(", ")} first
+            {" "}{"\u2014"} these have the highest buying committee readiness scores.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HistoryView({ history, onSelect, onDelete, loading: histLoading, dbStatus, dbError }) {
   if (histLoading) return (
     <div style={{ textAlign: "center", padding: "60px 20px", color: VT.textDim }}>
@@ -1275,6 +1738,7 @@ const NAV_ITEMS = [
   { id: "analyze", icon: "🔬", label: "Analyze" },
   { id: "report", icon: "📊", label: "Report" },
   { id: "outreach", icon: "🎯", label: "Outreach" },
+  { id: "accounts", icon: "🏢", label: "Accounts" },
   { id: "history", icon: "📋", label: "History" }
 ];
 
@@ -1392,18 +1856,43 @@ export default function SirionDashboard({ user, onSignOut }) {
       setAnalysisData(analysisResult);
       setNav("report");
 
+      // ═══ CLM MATURITY BUCKET DETECTION (piggybacks on analysis signals) ═══
+      const companyName = analysisResult.decision_maker?.company || "Unknown";
+      const techSignals = [
+        ...(analysisResult.analysis?.tech_stack?.signals || []),
+        ...(analysisResult.analysis?.competitor_usage?.signals || []),
+        ...(analysisResult.analysis?.digital_footprint?.signals || []),
+      ].filter(Boolean);
+      const bucketDetection = detectBucketFromSignals(techSignals);
+
       // ═══ PUSH TO PIPELINE (M4 output → M5) ═══
+      const existingBuckets = pipeline.m4.companyBuckets || {};
       updateModule("m4", {
         analyses: [...(pipeline.m4.analyses || []), {
           person: analysisResult.decision_maker?.name || "Unknown",
-          company: analysisResult.decision_maker?.company || "Unknown",
+          company: companyName,
           title: analysisResult.decision_maker?.title || "",
           stage: analysisResult.primary_stage || "",
           readiness: analysisResult.readiness_score || 0,
+          bucketId: bucketDetection.bucket?.id || null,
           analyzedAt: new Date().toISOString(),
         }],
         latestStage: analysisResult.primary_stage || null,
         latestReadiness: analysisResult.readiness_score || 0,
+        // Store bucket detection per company
+        companyBuckets: {
+          ...existingBuckets,
+          [companyName]: {
+            bucketId: bucketDetection.bucket?.id || "stone_age",
+            bucketName: bucketDetection.bucket?.name || "Unknown",
+            detectedSignals: bucketDetection.matchedSignals || [],
+            confidence: bucketDetection.confidence || 0,
+            analysisId: null, // will be set after Firebase save
+            severity: bucketDetection.bucket?.severity || 10,
+            sirionFit: bucketDetection.bucket?.sirionFit || "high",
+            detectedAt: new Date().toISOString(),
+          },
+        },
         analyzedAt: new Date().toISOString(),
         // Phase 3: Generation tracking
         generationId: new Date().toISOString(),
@@ -1416,11 +1905,17 @@ export default function SirionDashboard({ user, onSignOut }) {
         outreach_data: null,
         cleaned_profile: cleanedProfile,
         company_url: companyUrl || "",
-        company_name: analysisResult.decision_maker?.company || "Unknown",
+        company_name: companyName,
         person_name: analysisResult.decision_maker?.name || "Unknown",
         person_title: analysisResult.decision_maker?.title || "",
         primary_stage: analysisResult.primary_stage || "",
         readiness_score: analysisResult.readiness_score || 0,
+        clm_maturity: {
+          bucketId: bucketDetection.bucket?.id || "stone_age",
+          bucketName: bucketDetection.bucket?.name || "Unknown",
+          confidence: bucketDetection.confidence || 0,
+          matchedSignals: bucketDetection.matchedSignals || [],
+        },
         verified: false,
         created_at: new Date().toISOString()
       });
@@ -1609,6 +2104,7 @@ export default function SirionDashboard({ user, onSignOut }) {
                 {item.id === "report" && analysisData && (
                   <span style={{ marginLeft: "auto", fontSize: 11, padding: "1px 6px", borderRadius: 8, background: verificationData ? "rgba(16,185,129,0.12)" : VT.card, color: verificationData ? "#10B981" : VT.textDim, fontWeight: 700 }}>{verificationData ? "✓" : "○"}</span>
                 )}
+                {item.id === "accounts" && (pipeline.m4?.analyses?.length > 0) && <span style={{ marginLeft: "auto", fontSize: 11, padding: "1px 7px", borderRadius: 10, background: VT.teal + "12", color: VT.teal, fontWeight: 700 }}>{[...new Set((pipeline.m4.analyses || []).map(a => a.company).filter(Boolean))].length}</span>}
                 {item.id === "history" && history.length > 0 && <span style={{ marginLeft: "auto", fontSize: 11, padding: "1px 7px", borderRadius: 10, background: VT.card, color: VT.textDim }}>{history.length}</span>}
               </button>
             );
@@ -1686,6 +2182,7 @@ export default function SirionDashboard({ user, onSignOut }) {
               {nav === "analyze" && "🔬 Decision Maker Analysis"}
               {nav === "report" && "📊 Verified Readiness Report"}
               {nav === "outreach" && "🎯 Outreach Report"}
+              {nav === "accounts" && "🏢 Account Intelligence"}
               {nav === "history" && "📋 Analysis History"}
             </span>
             {nav === "report" && (
@@ -1713,7 +2210,7 @@ export default function SirionDashboard({ user, onSignOut }) {
 
           {nav === "analyze" && !loading && <InputForm onAnalyze={runAnalysis} loading={loading} m1Personas={pipeline.m1?.personaProfiles || []} />}
           {loading && <LoadingState steps={loadingType === "outreach" ? OUTREACH_STEPS : ANALYSIS_STEPS} step={loadingStep} title={loadingType === "outreach" ? "Generating Outreach Report..." : loadingStep < 2 ? "⚡ Preprocessing LinkedIn..." : "Deep Research in Progress..."} />}
-          {nav === "report" && !loading && analysisData && <AnalysisView data={analysisData} verification={verificationData} verifying={verifying} verificationError={verificationError} onVerify={runVerification} m1Questions={pipeline.m1?.questions || []} />}
+          {nav === "report" && !loading && analysisData && <AnalysisView data={analysisData} verification={verificationData} verifying={verifying} verificationError={verificationError} onVerify={runVerification} m1Questions={pipeline.m1?.questions || []} companyBuckets={pipeline.m4?.companyBuckets || {}} />}
           {nav === "report" && !loading && !analysisData && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px", textAlign: "center" }}>
               <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.4 }}>{"\uD83D\uDCCA"}</div>
@@ -1729,6 +2226,17 @@ export default function SirionDashboard({ user, onSignOut }) {
             </div>
           )}
           {nav === "outreach" && !loading && <OutreachView outreach={outreachData} analysisData={analysisData} />}
+          {nav === "accounts" && !loading && <AccountsView
+            analyses={pipeline.m4?.analyses || []}
+            companyBuckets={pipeline.m4?.companyBuckets || {}}
+            history={history}
+            onSelectCompany={(co) => {
+              // Find the latest analysis for this company in history and open it
+              const match = history.find(h => (h.data?.decision_maker?.company || "").trim() === co);
+              if (match) { loadFromHistory(match); }
+            }}
+            onViewMatrix={null} // M1 Yin Matrix navigation requires parent-level routing (handled by App.jsx)
+          />}
           {nav === "history" && !loading && <HistoryView history={history} onSelect={loadFromHistory} onDelete={deleteFromHistory} loading={historyLoading} dbStatus={dbStatus} dbError={dbError} />}
         </div>
       </div>

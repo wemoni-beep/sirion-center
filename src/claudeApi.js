@@ -92,6 +92,59 @@ export async function callClaude(systemPrompt, userMessage, timeoutMs = 120000) 
  * Use for: Conversational AI advisor, strategy Q&A.
  * Accepts multi-turn messages array [{role, content}].
  */
+/** Read xAI/Grok key from localStorage. */
+export function getGrokKey() {
+  return localStorage.getItem("xt_grok_key") || "";
+}
+
+/**
+ * Grok research call — xAI API with live web search, returns parsed JSON.
+ * Use for: Dual-engine company research alongside Claude.
+ * xAI API is OpenAI-compatible. Model: grok-3 with search.
+ * Cost: ~$0.10 per call.
+ */
+export async function callGrok(systemPrompt, userMessage, timeoutMs = 120000) {
+  const key = getGrokKey();
+  if (!key) throw new Error("xAI API key not configured. Enter it in Settings.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: "grok-4-latest",
+        max_tokens: 4096,
+        temperature: 0,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        search_parameters: { mode: "auto", max_search_results: 10 },
+      }),
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "xAI API Error");
+    // OpenAI-compatible response: choices[0].message.content
+    const text = data.choices?.[0]?.message?.content || "";
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    try { return JSON.parse(cleaned); } catch {
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (m) return JSON.parse(m[0]);
+      throw new Error("Failed to parse Grok response.");
+    }
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") throw new Error("Grok request timed out — try again.");
+    throw e;
+  }
+}
+
 export async function callClaudeChat(systemPrompt, messages, maxTokens = 2048) {
   const key = getAnthropicKey();
   if (!key) throw new Error("Anthropic API key not configured. Enter it in Settings or add VITE_ANTHROPIC_API_KEY to .env");
