@@ -84,4 +84,5 @@ function localBackupPlugin() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), localBackupPlugin()],
+  base: process.env.GITHUB_PAGES ? '/sirion-center/' : '/',
 })
