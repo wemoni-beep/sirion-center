@@ -1185,17 +1185,8 @@ export default function QuestionGenerator({ onNavigate }) {
   // This ensures the database always shows the complete set (e.g. 138).
   const pipelineQuestions = pipeline.m1.questions || [];
 
-  // ── Auto-restore question bank after page refresh ──
-  // generated resets to false on every reload. If the pipeline already has questions,
-  // restore the bank automatically so the user doesn't have to click "Load KB" again.
-  useEffect(() => {
-    if (!generated && pipeline._loaded && pipelineQuestions.length > 0) {
-      setGenerated(true);
-      getQuestionsForCompany(company).then(cached => {
-        if (cached.length > 0) setKbQuestions(cached);
-      }).catch(() => {});
-    }
-  }, [pipeline._loaded, pipelineQuestions.length]); // eslint-disable-line
+  // Questions only show when user clicks "Show Question Database" button.
+  // No auto-restore — generated stays false until explicit user action.
   const questions = useMemo(() => {
     if (!generated) return [];
     const seenMap = new Map(); // hash → index in merged
