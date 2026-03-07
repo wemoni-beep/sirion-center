@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useTheme } from "./ThemeContext";
 import { usePipeline } from "./PipelineContext";
 import { db } from "./firebase.js";
-import { callClaude, callClaudeFast, callGrok, getGrokKey } from "./claudeApi.js";
+import { callClaude, callClaudeFast } from "./claudeApi.js";
 import {
   questionHash, saveQuestions, deleteQuestions, getQuestionsForCompany,
   saveMacro, getAllMacros, saveCompanyIntel, getCompanyIntel,
@@ -10,12 +10,6 @@ import {
   getPersonasForCompany, getAllPersonas, updatePersona, deletePersona,
   hydrateQuestions, hydrateMacros, hydrateCompanyIntel,
 } from "./questionDB.js";
-import {
-  TECH_BUCKETS, PAIN_CATEGORIES, PAIN_LIBRARY, PERSONA_PAIN_WEIGHTS,
-  detectBucketFromSignals, getPainsForPersona, findConnectingThread, buildPainGrid,
-  getBucketById, getBucketOptions,
-  BUCKET_DETECTION_PROMPT, parseBucketDetectionResponse, mergeDetectionResults,
-} from "./data/yinMatrix.js";
 
 /* ═══════════════════════════════════════════════════════
    MODULE 1 — QUESTION GENERATOR + PERSONA RESEARCH
@@ -221,24 +215,6 @@ const Q_BANK = [
   { q: "How to maximize ROI from {company} CLM deployment", p: "cm", s: "validation", c: "Implementation & ROI", l: "full-stack" },
   { q: "{company} CLM roadmap and future AI capabilities", p: "cio", s: "validation", c: "Agentic CLM", l: "pre-signature" },
   { q: "Best practices for scaling {company} CLM across business units", p: "pd", s: "validation", c: "Enterprise Scale", l: "full-stack" },
-];
-
-/* ───────────────────────────────────────────────
-   BENCHMARK QUESTIONS — 10 ground-truth buyer queries
-   Hard-coded, always present, used as scan baseline.
-   Synced to M2 via "Push to M2 Scan" button.
-   ─────────────────────────────────────────────── */
-const BENCHMARK_QUESTIONS = [
-  { id: "bm-1",  q: "How to reduce contract cycle time in enterprise", p: "cpo", s: "awareness", c: "Contract AI / Automation", l: "pre-signature" },
-  { id: "bm-2",  q: "Why do companies lose money on contract renewals", p: "cfo", s: "awareness", c: "Post-Signature / Obligations", l: "post-signature" },
-  { id: "bm-3",  q: "How to track contract obligations automatically", p: "gc", s: "discovery", c: "Post-Signature / Obligations", l: "post-signature" },
-  { id: "bm-4",  q: "What is CLM software", p: "ceo", s: "awareness", c: "CLM Platform Selection", l: "full-stack" },
-  { id: "bm-5",  q: "Best CLM platform for enterprise 2026", p: "cio", s: "discovery", c: "CLM Platform Selection", l: "full-stack" },
-  { id: "bm-6",  q: "AI-powered contract management software", p: "cto", s: "discovery", c: "Contract AI / Automation", l: "full-stack" },
-  { id: "bm-7",  q: "Sirion vs Icertis which is better", p: "cpo", s: "consideration", c: "CLM Platform Selection", l: "full-stack" },
-  { id: "bm-8",  q: "Ironclad vs Sirion comparison", p: "gc", s: "consideration", c: "CLM Platform Selection", l: "full-stack" },
-  { id: "bm-9",  q: "Best CLM for procurement teams", p: "vplo", s: "discovery", c: "Procurement CLM", l: "pre-signature" },
-  { id: "bm-10", q: "Contract management for pharmaceutical", p: "gc", s: "awareness", c: "CLM Platform Selection", l: "full-stack" },
 ];
 
 /* ── LinkedIn Cleanup Prompt (reused from M4) ──────────── */
@@ -956,8 +932,6 @@ export default function QuestionGenerator({ onNavigate }) {
   const [filterIntentType, setFilterIntentType] = useState("all");
   const [filterVolumeTier, setFilterVolumeTier] = useState("all");
   const [filterCluster, setFilterCluster] = useState("all");
-  const [filterSource, setFilterSource] = useState("all");
-
 
   // ── Decision Matrix state ──
   const [activeMatrixPersona, setActiveMatrixPersona] = useState("gc");
@@ -969,19 +943,6 @@ export default function QuestionGenerator({ onNavigate }) {
   const [expandedCriterion, setExpandedCriterion] = useState(null); // key of expanded row
   const [autoGrading, setAutoGrading] = useState(false);
   const [autoGradeSource, setAutoGradeSource] = useState(null); // { scoredAt, count }
-  // ── Yin Matrix state ──
-  const [matrixView, setMatrixView] = useState("yin"); // "yin" | "scorecard"
-  const [yinCompany, setYinCompany] = useState(null); // selected company name
-  const [yinBucketId, setYinBucketId] = useState(null); // selected bucket override
-  const [bucketDetecting, setBucketDetecting] = useState(false); // AI detection in progress
-  const [bucketDetectionError, setBucketDetectionError] = useState(null);
-  const [detectionPhase, setDetectionPhase] = useState(null); // "init"|"scanning"|"evidence"|"verdict"
-  const [scanProgress, setScanProgress] = useState([]); // signal source IDs that have been "scanned"
-  const [detectionElapsed, setDetectionElapsed] = useState(0);
-  const [revealedEvidence, setRevealedEvidence] = useState([]); // evidence items revealed one-by-one
-  const [detectionResult, setDetectionResult] = useState(null); // final parsed result for verdict
-  const [expandedSignal, setExpandedSignal] = useState(null); // expanded signal source card ID
-  const [expandedPainCell, setExpandedPainCell] = useState(null); // "personaId:category"
 
   // ── Knowledge base state ──
   const [kbStats, setKbStats] = useState({ totalQuestions: 0, totalMacros: 0, companiesResearched: 0, totalPersonas: 0 });
@@ -1018,14 +979,6 @@ export default function QuestionGenerator({ onNavigate }) {
     }, 1000);
     return () => clearInterval(interval);
   }, [enrichmentLoading]);
-
-  // ── Bucket detection elapsed timer ──
-  useEffect(() => {
-    if (!bucketDetecting) return;
-    setDetectionElapsed(0);
-    const t = setInterval(() => setDetectionElapsed(p => p + 1), 1000);
-    return () => clearInterval(t);
-  }, [bucketDetecting]);
 
   // ── One-time migration: save pipeline questions to KB so they persist ──
   useEffect(() => {
@@ -1301,15 +1254,6 @@ export default function QuestionGenerator({ onNavigate }) {
       enrichedAt: q.enrichedAt || null,
     }));
 
-    // Tier 1.5: Benchmark questions — 10 ground-truth buyer queries, always present
-    BENCHMARK_QUESTIONS.forEach(q => addQ({
-      id: q.id,
-      query: q.q,
-      persona: q.p, stage: q.s, cluster: q.c,
-      lifecycle: q.l || "full-stack",
-      source: "benchmark", classification: "macro",
-    }, { mergeMetadata: true }));
-
     // Tier 2: Static Q_BANK — fills missing persona/stage on pipeline questions that lost metadata
     Q_BANK.forEach((q, i) => addQ({
         id: `q-${i + 1}`,
@@ -1366,10 +1310,9 @@ export default function QuestionGenerator({ onNavigate }) {
       if (filterIntentType !== "all" && q.intentType !== filterIntentType) return false;
       if (filterVolumeTier !== "all" && q.volumeTier !== filterVolumeTier) return false;
       if (filterCluster !== "all" && q.cluster !== filterCluster) return false;
-      if (filterSource !== "all" && (q.source || "pipeline") !== filterSource) return false;
       return true;
     });
-  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier, filterCluster, filterSource]);
+  }, [questions, filterStage, filterPersona, filterJurisdiction, filterLifecycle, filterIntentType, filterVolumeTier, filterCluster]);
 
   // When a specific profile is selected in the filter, show that persona's questions
   // (they live in personaGeneratedQs, not the main bank). Otherwise show filtered bank questions.
@@ -2848,54 +2791,120 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
 
       {activeTab === "questions" && (
         <>
-          {/* Personas — 2-Column Grid Cards */}
+          {/* Personas — Influence Funnel */}
           <label style={{ ...label, marginBottom: 10 }}>Target Personas ({activePersonas.size} selected)</label>
-          <div style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
-            marginBottom: 20,
-          }}>
-            {sortedPersonas.map(p => {
-              const on = activePersonas.has(p.id);
-              return (
-                <button key={p.id} onClick={() => togglePersona(p.id)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "10px 12px", borderRadius: 10,
-                    background: on
-                      ? (t.mode === "dark" ? "rgba(167,139,250,0.08)" : "rgba(124,58,237,0.06)")
-                      : (t.mode === "dark" ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.01)"),
-                    border: `1.5px solid ${on ? t.brand + "45" : t.border}`,
-                    cursor: "pointer", textAlign: "left",
-                    transition: "all 0.2s cubic-bezier(0.4,0,0.2,1)",
-                    opacity: on ? 1 : 0.55,
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = on ? t.brand + "70" : t.brand + "30"; e.currentTarget.style.transform = "translateY(-1px)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = on ? t.brand + "45" : t.border; e.currentTarget.style.transform = "none"; }}
-                >
-                  {/* Avatar */}
-                  <div style={{
-                    width: 42, height: 42, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
-                    border: `2.5px solid ${on ? t.brand + "60" : t.border}`,
-                    filter: on ? "none" : "grayscale(0.6) opacity(0.7)",
-                    transition: "all 0.25s",
-                    boxShadow: on ? `0 0 10px ${t.brand}20` : "none",
-                  }}>
-                    <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
-                  </div>
-                  {/* Text */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: on ? t.text : t.textGhost, lineHeight: 1.2 }}>{p.label}</span>
-                      <span style={{ fontSize: 9, fontWeight: 700, fontFamily: "var(--mono)", color: on ? t.brand : t.textGhost, opacity: 0.7 }}>{p.influence}%</span>
-                    </div>
+          <div style={{ position: "relative", marginBottom: 20 }}>
+            <div style={{
+              display: "flex", alignItems: "flex-end", gap: 0,
+              padding: "18px 10px 0", borderRadius: 12,
+              background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
+              border: `1px solid ${t.border}`,
+              overflow: "hidden",
+            }}>
+              {sortedPersonas.map((p, i) => {
+                const on = activePersonas.has(p.id);
+                const hov = hoveredPersonaBar === p.id;
+                const maxH = 130;
+                const barH = Math.max(24, (p.influence / 100) * maxH);
+                const barColor = on
+                  ? (t.mode === "dark" ? "rgba(167,139,250,0.55)" : "rgba(124,58,237,0.35)")
+                  : (t.mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)");
+                const barBorder = on ? t.brand + "50" : t.border;
+                return (
+                  <button key={p.id} onClick={() => togglePersona(p.id)}
+                    onMouseEnter={() => setHoveredPersonaBar(p.id)}
+                    onMouseLeave={() => setHoveredPersonaBar(null)}
+                    style={{
+                      flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                      background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                      transition: "transform 0.2s", transform: hov ? "translateY(-3px)" : "none",
+                    }}>
+                    {/* Percentage */}
                     <div style={{
-                      fontSize: 10, color: on ? t.textDim : t.textGhost, lineHeight: 1.3,
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    }}>{p.desc}</div>
+                      fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
+                      color: on ? t.text : t.textGhost, marginBottom: 6,
+                      opacity: hov ? 1 : 0.8, transition: "opacity 0.2s",
+                    }}>{p.influence}%</div>
+                    {/* Bar */}
+                    <div style={{
+                      width: "70%", height: barH, borderRadius: "6px 6px 0 0",
+                      background: hov && on
+                        ? (t.mode === "dark" ? "rgba(167,139,250,0.7)" : "rgba(124,58,237,0.45)")
+                        : barColor,
+                      borderTop: `1px solid ${barBorder}`, borderLeft: `1px solid ${barBorder}`, borderRight: `1px solid ${barBorder}`, borderBottom: "none",
+                      transition: "all 0.25s cubic-bezier(0.4,0,0.2,1)",
+                      boxShadow: hov && on ? `0 0 12px ${t.brand}30` : "none",
+                    }} />
+                    {/* Avatar */}
+                    <div style={{
+                      width: 34, height: 34, borderRadius: "50%", overflow: "hidden",
+                      border: `2px solid ${on ? t.brand + "60" : t.border}`,
+                      margin: "8px 0 4px",
+                      filter: on ? "none" : "grayscale(0.5) opacity(0.6)",
+                      transition: "all 0.25s",
+                      transform: hov ? "scale(1.12)" : "scale(1)",
+                    }}>
+                      <img src={p.avatar} alt={p.short} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                    {/* Label */}
+                    <div style={{
+                      fontSize: 9, fontWeight: 600, color: on ? t.text : t.textGhost,
+                      lineHeight: 1.2, textAlign: "center", marginBottom: 10,
+                      maxWidth: 72, fontFamily: "var(--mono)",
+                    }}>{p.label.length > 14 ? p.short : p.label}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Persona hover tooltip — same design as bubble chart */}
+            {hoveredPersonaBar && (() => {
+              const hp = PERSONAS.find(p => p.id === hoveredPersonaBar);
+              if (!hp) return null;
+              const idx = sortedPersonas.findIndex(p => p.id === hp.id);
+              const n = sortedPersonas.length;
+              // Position tooltip above chart, horizontally near the bar
+              const barPct = ((idx + 0.5) / n) * 100;
+              // Clamp so tooltip stays inside container
+              const leftPct = Math.max(5, Math.min(barPct - 18, 60));
+              const accentColor = t.brand;
+              return (
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 8px)", left: `${leftPct}%`,
+                  zIndex: 30, pointerEvents: "none",
+                  background: t.mode === "dark" ? "rgba(15,15,30,0.95)" : "rgba(255,255,255,0.97)",
+                  border: `1px solid ${accentColor}40`, borderRadius: 10,
+                  padding: "14px 18px", width: 300,
+                  boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px ${accentColor}15`,
+                  backdropFilter: "blur(12px)", animation: "fadeUp 0.15s ease",
+                }}>
+                  {/* Header: avatar + name + short */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <img src={hp.avatar} alt={hp.short} style={{
+                      width: 36, height: 36, borderRadius: "50%", objectFit: "cover",
+                      border: `2px solid ${accentColor}60`,
+                    }} />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{hp.label}</div>
+                      <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>{hp.short}</div>
+                    </div>
                   </div>
-                </button>
+                  {/* Role description */}
+                  <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5, marginBottom: 8 }}>{hp.role}</div>
+                  {/* CLM angle */}
+                  <div style={{ fontSize: 10, color: accentColor, lineHeight: 1.4, fontStyle: "italic" }}>{hp.clmAngle}</div>
+                  {/* Influence bar */}
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>DECISION INFLUENCE</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 48, height: 4, borderRadius: 2, background: t.border, overflow: "hidden" }}>
+                        <div style={{ width: `${hp.influence}%`, height: "100%", borderRadius: 2, background: accentColor }} />
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: accentColor, fontFamily: "var(--mono)" }}>{hp.influence}%</span>
+                    </div>
+                  </div>
+                </div>
               );
-            })}
+            })()}
           </div>
 
           {/* Topic Clusters — Bubble Chart */}
@@ -3824,16 +3833,6 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                       ))}
                     </select>
                   )}
-
-                  <select value={filterSource} onChange={e => setFilterSource(e.target.value)}
-                    style={{ ...inp, width: "auto", padding: "6px 10px", fontSize: 11, cursor: "pointer", background: t.inputBg }}>
-                    <option value="all">All Sources</option>
-                    <option value="benchmark">Benchmark ({questions.filter(q => q.source === "benchmark").length})</option>
-                    <option value="static">Seed ({questions.filter(q => q.source === "static").length})</option>
-                    <option value="ai">AI ({questions.filter(q => q.source === "ai").length})</option>
-                    <option value="kb">KB ({questions.filter(q => q.source === "kb").length})</option>
-                    <option value="pipeline">Pipeline ({questions.filter(q => (q.source || "pipeline") === "pipeline").length})</option>
-                  </select>
                 </div>
 
                 {/* Row 2: Actions */}
@@ -3861,36 +3860,6 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                     }}>
                     {exportCopied ? "\u2713 Synced to M2" : "\u21BB Sync to M2"}
                   </button>
-                  {onNavigate && (
-                    <button onClick={() => {
-                      // Push selected questions (or all if none selected) as scan batch for M2
-                      const sel = displayQuestions.filter(q => selectedQs.has(q.id));
-                      const batch = sel.length > 0 ? sel : displayQuestions;
-                      const isBenchmarkOnly = batch.every(q => q.source === "benchmark");
-                      updateModule("m1", {
-                        scanBatch: {
-                          questions: batch.map(q => ({
-                            id: q.id, query: q.query, persona: q.persona, stage: q.stage,
-                            cluster: q.cluster, lifecycle: q.lifecycle || "full-stack",
-                            source: q.source, classification: q.classification,
-                          })),
-                          createdAt: new Date().toISOString(),
-                          name: isBenchmarkOnly ? "Benchmark" : sel.length > 0 ? `Selected (${sel.length})` : `All (${batch.length})`,
-                          scanType: "selective",
-                        },
-                      });
-                      onNavigate("m2");
-                    }}
-                      style={{
-                        padding: "5px 10px", borderRadius: 5,
-                        border: "1px solid rgba(45,212,191,0.35)",
-                        background: "rgba(45,212,191,0.06)",
-                        color: "#2dd4bf", fontSize: 11, cursor: "pointer",
-                        fontFamily: "var(--mono)",
-                      }}>
-                      {selectedQs.size > 0 ? `Push ${selectedQs.size} & Scan \u2192` : `Push All & Scan \u2192`}
-                    </button>
-                  )}
                   <button onClick={handleQuestionCleanup} disabled={cleanupLoading || questions.length === 0}
                     style={{
                       padding: "5px 10px", borderRadius: 5,
@@ -4032,7 +4001,6 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                                 </div>
                                 {/* Metadata row: source + jurisdiction + intent */}
                                 <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
-                                  {q.source === "benchmark" && <span style={badge("rgba(167,139,250,0.2)", "#a78bfa")}>BM</span>}
                                   {q.source === "ai" && <span style={badge("rgba(167,139,250,0.15)", "#a78bfa")}>AI</span>}
                                   {q.source === "persona-research" && <span style={badge("rgba(236,72,153,0.12)", "#ec4899")}>PERSONA</span>}
                                   {q.source === "kb" && <span style={badge("rgba(103,232,249,0.12)", "#67e8f9")}>KB</span>}
@@ -4226,1266 +4194,104 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
       )}
 
       {/* ═══════════════════════════════════════════════════ */}
-      {/* TAB: DECISION MATRIX (Yin Matrix + Evaluation Scorecard) */}
+      {/* TAB: DECISION MATRIX                              */}
       {/* ═══════════════════════════════════════════════════ */}
+      {/* NOTE: handleAutoGrade defined inline below in JSX via useCallback-like pattern */}
       {activeTab === "matrix" && (
         <div>
-          {/* View toggle: Yin Matrix / Evaluation Scorecard */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-            <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${t.border}` }}>
-              {[{ id: "yin", label: "Yin Matrix" }, { id: "scorecard", label: "Evaluation Scorecard" }].map(v => (
-                <button key={v.id} onClick={() => setMatrixView(v.id)} style={{
-                  padding: "8px 16px", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
-                  fontFamily: "var(--mono)", transition: "all 0.15s",
-                  background: matrixView === v.id ? t.brand : "transparent",
-                  color: matrixView === v.id ? "#fff" : t.textDim,
-                }}>
-                  {v.label}
-                </button>
-              ))}
-            </div>
-            <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>
-              {matrixView === "yin" ? "Multi-persona account attack grid" : "Per-persona Sirion evaluation"}
-            </span>
+          <div style={{ marginBottom: 24 }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: t.text }}>
+              Decision Matrix
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
+              Per-persona evaluation criteria. Score Sirion 1–10 on each criterion.
+              Question coverage populates automatically after generation. Use <strong style={{ color: "#fbbf24" }}>Re-enrich</strong> to refresh after adding new questions.
+            </p>
           </div>
 
-          {/* ── YIN MATRIX VIEW ── */}
-          {matrixView === "yin" && (() => {
-            // Derive unique companies from personaProfiles
-            const companies = [...new Set(personaProfiles.map(p => p.company).filter(Boolean))];
-            const selectedCompany = yinCompany || companies[0] || null;
-            const companyPersonas = personaProfiles.filter(p => p.company === selectedCompany);
-            // Get bucket: from M4 pipeline detection or manual override
-            const m4Buckets = pipeline.m4?.companyBuckets || {};
-            const m4Detected = selectedCompany ? m4Buckets[selectedCompany] : null;
-            const activeBucketId = yinBucketId || m4Detected?.bucketId || null;
-            const activeBucket = activeBucketId ? getBucketById(activeBucketId) : null;
-            const bucketPains = activeBucketId ? (PAIN_LIBRARY[activeBucketId] || []) : [];
-            // Build the pain grid
-            const gridPersonas = companyPersonas.map(p => ({
-              id: p.id, personaType: p.personaType, name: p.name, title: p.title,
-              psycheProfile: p.psycheProfile,
-            }));
-            const painGrid = activeBucketId ? buildPainGrid(activeBucketId, gridPersonas) : null;
-            // M4 analyses for committee readiness
-            const m4Analyses = pipeline.m4?.analyses || [];
-            const companyAnalyses = m4Analyses.filter(a => {
-              const aCompany = a.company || a.metadata?.company || "";
-              return aCompany.toLowerCase() === (selectedCompany || "").toLowerCase();
-            });
+          {/* Persona selector */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
+            {PERSONAS.map(p => (
+              <button key={p.id} onClick={() => setActiveMatrixPersona(p.id)} style={{
+                padding: "8px 16px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 700,
+                fontFamily: "var(--mono)", border: `1px solid ${activeMatrixPersona === p.id ? t.brand + "60" : t.border}`,
+                background: activeMatrixPersona === p.id ? t.brand + "15" : "transparent",
+                color: activeMatrixPersona === p.id ? t.brand : t.textDim, transition: "all 0.15s",
+              }}>
+                {p.icon} {p.short}
+              </button>
+            ))}
+          </div>
 
-            // ── Signal sources for cinematic scanning animation ──
-            const DETECT_SIGNALS = [
-              { id: "jobs", label: "Job Postings", desc: "LinkedIn Jobs, Indeed, Glassdoor" },
-              { id: "reviews", label: "G2 / Capterra Reviews", desc: "Software review platforms" },
-              { id: "techstack", label: "Tech Stack Detection", desc: "BuiltWith, Wappalyzer, SimilarTech" },
-              { id: "linkedin", label: "Employee Profiles", desc: "LinkedIn skills & experience" },
-              { id: "news", label: "News & Press Releases", desc: "Acquisitions, vendor partnerships" },
-              { id: "vendors", label: "Vendor Case Studies", desc: "CLM vendor customer pages" },
-              { id: "careers", label: "Career Page Analysis", desc: "Required tool experience in roles" },
-            ];
-
-            // ── AI Bucket Detection handler — cinematic ──
-            const handleDetectBucket = async () => {
-              if (!selectedCompany || bucketDetecting) return;
-              setBucketDetecting(true);
-              setBucketDetectionError(null);
-              setDetectionPhase("init");
-              setScanProgress([]);
-              setRevealedEvidence([]);
-              setDetectionResult(null);
-
-              // Phase 1: Init pause (1.2s)
-              await new Promise(r => setTimeout(r, 1200));
-              setDetectionPhase("scanning");
-
-              // Phase 2: Animate through signal sources while API runs
-              let scanIdx = 0;
-              const scanTimer = setInterval(() => {
-                if (scanIdx < DETECT_SIGNALS.length) {
-                  const currentId = DETECT_SIGNALS[scanIdx].id; // capture value
-                  setScanProgress(prev => [...prev, currentId]);
-                  scanIdx++;
-                } else {
-                  clearInterval(scanTimer);
-                }
-              }, 900);
-
-              try {
-                const companyUrl = pipeline.meta?.url || "";
-                const userMsg = `Company: ${selectedCompany}\nURL: ${companyUrl}\nIndustry: ${pipeline.meta?.industry || "unknown"}\n\nResearch this company's contract management / CLM technology stack and assign a maturity bucket. Search for their job postings, G2/Capterra reviews, tech stack, news, vendor case studies, and career page for CLM-related tools.`;
-
-                // ── DUAL-ENGINE: fire Claude + Grok in parallel ──
-                const hasGrok = !!getGrokKey();
-                console.log(`[YinMatrix] Dual-engine: Claude=yes, Grok=${hasGrok ? "yes" : "no key"}`);
-                const promises = [
-                  callClaude(BUCKET_DETECTION_PROMPT, userMsg, 90000)
-                    .then(r => ({ engine: "claude", raw: r }))
-                    .catch(e => ({ engine: "claude", error: e })),
-                ];
-                if (hasGrok) {
-                  promises.push(
-                    callGrok(BUCKET_DETECTION_PROMPT, userMsg, 90000)
-                      .then(r => ({ engine: "grok", raw: r }))
-                      .catch(e => ({ engine: "grok", error: e })),
-                  );
-                }
-
-                const settled = await Promise.all(promises);
-                clearInterval(scanTimer);
-
-                // Parse results from each engine
-                let claudeResult = null;
-                let grokResult = null;
-                for (const r of settled) {
-                  if (r.error) {
-                    console.warn(`[YinMatrix] ${r.engine} failed:`, r.error.message);
-                    continue;
-                  }
-                  console.log(`[YinMatrix] ${r.engine} raw:`, JSON.stringify(r.raw).substring(0, 500));
-                  const parsed = parseBucketDetectionResponse(r.raw);
-                  if (r.engine === "claude") claudeResult = parsed;
-                  if (r.engine === "grok") grokResult = parsed;
-                }
-
-                // Merge if dual-engine, otherwise use single result
-                const result = (claudeResult && grokResult)
-                  ? mergeDetectionResults(claudeResult, grokResult)
-                  : (claudeResult || grokResult);
-                if (result && !result.engines) {
-                  result.engines = claudeResult ? ["claude"] : ["grok"];
-                  result.enginesAgree = null;
-                }
-
-                // Mark all sources as scanned
-                setScanProgress(DETECT_SIGNALS.map(s => s.id));
-                console.log("[YinMatrix] Final result:", result ? JSON.stringify(result).substring(0, 500) : "null");
-                if (result && result.bucketId) {
-                  // Phase 3: Evidence reveal — stagger each signal
-                  setDetectionPhase("evidence");
-                  setDetectionResult(result);
-                  const safeSignals = (result.signals || []).filter(s => s && typeof s === "object");
-                  if (safeSignals.length > 0) {
-                    for (let i = 0; i < safeSignals.length; i++) {
-                      await new Promise(r => setTimeout(r, 350));
-                      setRevealedEvidence(prev => [...prev, safeSignals[i]]);
-                    }
-                  }
-                  await new Promise(r => setTimeout(r, 600));
-
-                  // Phase 4: Verdict — save THEN show
-                  const updatedBuckets = { ...(pipeline.m4?.companyBuckets || {}), [selectedCompany]: result };
-                  updateModule("m4", { companyBuckets: updatedBuckets });
-                  // Small delay to let pipeline update settle before verdict render
-                  await new Promise(r => setTimeout(r, 100));
-                  setDetectionPhase("verdict");
-                  setYinBucketId(null);
-                  setExpandedPainCell(null);
-
-                  // Panel stays visible — user dismissed manually or on next detection
-                } else {
-                  setBucketDetectionError("Could not parse AI response. Try again or select manually.");
-                  setDetectionPhase(null);
-                }
-              } catch (e) {
-                clearInterval(scanTimer);
-                console.error("[YinMatrix] Bucket detection failed:", e);
-                setBucketDetectionError(e.message || "Detection failed");
-                setDetectionPhase(null);
-              } finally {
-                setBucketDetecting(false);
-              }
-            };
-
-            return (
-              <div>
-                {/* Header */}
-                <div style={{ marginBottom: 20 }}>
-                  <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: t.text }}>
-                    Yin Matrix
-                  </h2>
-                  <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
-                    Attack an entire buying committee by finding the ONE pain thread that connects all decision-makers.
-                    Select a company, detect their CLM maturity, then map pains across every persona.
-                  </p>
-                </div>
-
-                {/* Company Selector + Detect Button */}
-                <div style={{
-                  display: "flex", gap: 16, padding: "14px 18px", marginBottom: 0,
-                  background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: "10px 10px 0 0",
-                  flexWrap: "wrap", alignItems: "center",
-                }}>
-                  {/* Company dropdown */}
-                  <div>
-                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
-                      Target Company
-                    </div>
-                    {companies.length > 0 ? (
-                      <select
-                        value={selectedCompany || ""}
-                        onChange={e => { setYinCompany(e.target.value); setYinBucketId(null); setExpandedPainCell(null); setBucketDetectionError(null); }}
-                        style={{
-                          padding: "6px 10px", borderRadius: 6, border: `1px solid ${t.border}`,
-                          background: t.inputBg, color: t.text, fontSize: 13, fontWeight: 600,
-                          fontFamily: "var(--mono)", outline: "none", minWidth: 180,
-                        }}
-                      >
-                        {companies.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    ) : (
-                      <div style={{ fontSize: 12, color: t.textDim, fontFamily: "var(--mono)", padding: "6px 0" }}>
-                        No companies yet -- add personas in Research tab
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Detect button */}
-                  {selectedCompany && (
-                    <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
-                      <button
-                        onClick={handleDetectBucket}
-                        disabled={bucketDetecting}
-                        style={{
-                          padding: "7px 16px", borderRadius: 8, border: `1px solid ${t.brand}60`,
-                          background: bucketDetecting ? t.brand + "20" : `linear-gradient(135deg, ${t.brand}20, ${t.brand}08)`,
-                          color: t.brand, fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)",
-                          cursor: bucketDetecting ? "wait" : "pointer", whiteSpace: "nowrap",
-                          transition: "all 0.15s",
-                        }}
-                      >
-                        {bucketDetecting ? "Detecting..." : m4Detected ? "Re-Detect Bucket" : "Detect CLM Maturity"}
-                      </button>
-                      {/* Manual override */}
-                      <select
-                        value={activeBucketId || ""}
-                        onChange={e => { setYinBucketId(e.target.value || null); setExpandedPainCell(null); }}
-                        style={{
-                          padding: "6px 8px", borderRadius: 6, border: `1px solid ${t.border}`,
-                          background: t.inputBg, color: t.textDim, fontSize: 11,
-                          fontFamily: "var(--mono)", outline: "none", maxWidth: 160,
-                        }}
-                        title="Manual override"
-                      >
-                        <option value="">Manual override...</option>
-                        {TECH_BUCKETS.map(b => (
-                          <option key={b.id} value={b.id}>{b.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {/* Committee stats */}
-                  <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: t.brand, fontFamily: "var(--mono)", lineHeight: 1 }}>
-                      {companyPersonas.length}
-                    </div>
-                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
-                      Committee
-                    </div>
-                  </div>
-                </div>
-
-                {/* ═══════════════════════════════════════════════════════════════
-                    CINEMATIC DETECTION PANEL — Live scanning animation
-                    ═══════════════════════════════════════════════════════════════ */}
-                <style>{`
-                  @keyframes ym-scanLine { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
-                  @keyframes ym-pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
-                  @keyframes ym-fadeSlide { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-                  @keyframes ym-glow { 0%,100% { box-shadow: 0 0 8px rgba(139,92,246,0.2); } 50% { box-shadow: 0 0 20px rgba(139,92,246,0.5); } }
-                  @keyframes ym-fillBar { from { width: 0%; } to { width: 100%; } }
-                  @keyframes ym-verdictPop { 0% { transform: scale(0.9); opacity: 0; } 60% { transform: scale(1.03); } 100% { transform: scale(1); opacity: 1; } }
-                  @keyframes ym-spin { to { transform: rotate(360deg); } }
-                `}</style>
-
-                {(detectionPhase || detectionResult) && (
-                  <div style={{
-                    padding: 0, marginBottom: 20, borderRadius: 12,
-                    background: "linear-gradient(145deg, rgba(10,10,26,0.95), rgba(17,17,40,0.95), rgba(10,10,26,0.95))",
-                    border: `1px solid ${detectionResult && !detectionPhase ? t.brand + "20" : t.brand + "30"}`,
-                    position: "relative", overflow: "hidden",
-                  }}>
-                    {/* Animated scan line at top — only during active scanning */}
-                    {detectionPhase && detectionPhase !== "verdict" && (
-                      <div style={{
-                        position: "absolute", top: 0, left: 0, width: "50%", height: 2,
-                        background: `linear-gradient(90deg, transparent, ${t.brand}, transparent)`,
-                        animation: "ym-scanLine 1.8s ease-in-out infinite",
-                      }} />
-                    )}
-
-                    {/* Header bar */}
-                    <div style={{
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                      padding: "14px 20px 10px", borderBottom: `1px solid ${t.brand}15`,
-                    }}>
-                      <div>
-                        <div style={{
-                          fontSize: 10, fontFamily: "var(--mono)", textTransform: "uppercase",
-                          letterSpacing: 2.5, marginBottom: 3,
-                          color: !detectionPhase ? "#4ade80" : detectionPhase === "verdict" ? "#4ade80" : detectionPhase === "evidence" ? "#f59e0b" : t.brand,
-                        }}>
-                          {!detectionPhase ? "DETECTION COMPLETE" :
-                           detectionPhase === "init" ? "INITIALIZING SCAN" :
-                           detectionPhase === "scanning" ? "SCANNING SIGNAL SOURCES" :
-                           detectionPhase === "evidence" ? "EVIDENCE FOUND" :
-                           "ANALYSIS COMPLETE"}
-                        </div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>
-                          CLM Maturity Analysis: <span style={{ color: t.brand }}>{selectedCompany}</span>
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        {/* Re-run button when detection is complete */}
-                        {!detectionPhase && detectionResult && (
-                          <button onClick={handleDetectBucket} style={{
-                            padding: "5px 12px", borderRadius: 6, border: `1px solid ${t.border}`,
-                            background: "transparent", color: t.textSec, fontSize: 10,
-                            fontFamily: "var(--mono)", cursor: "pointer",
-                          }}>
-                            Re-scan
-                          </button>
-                        )}
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{
-                            fontSize: 22, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
-                            color: (!detectionPhase || detectionPhase === "verdict") ? "#4ade80" : t.brand + "70",
-                          }}>
-                            {detectionElapsed}s
-                          </div>
-                          <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
-                            {!detectionPhase ? "completed" : "elapsed"}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* INIT phase — pulsing text */}
-                    {detectionPhase === "init" && (
-                      <div style={{ padding: "30px 20px", textAlign: "center" }}>
-                        <div style={{
-                          width: 24, height: 24, margin: "0 auto 12px", borderRadius: "50%",
-                          border: `2px solid ${t.brand}`, borderTopColor: "transparent",
-                          animation: "ym-spin 0.8s linear infinite",
-                        }} />
-                        <div style={{ fontSize: 12, color: t.textSec, fontFamily: "var(--mono)", animation: "ym-pulse 1.5s ease infinite" }}>
-                          Preparing multi-source intelligence scan...
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Scored signal source grid — stays visible after detection */}
-                    {(detectionPhase === "scanning" || detectionPhase === "evidence" || detectionPhase === "verdict" || (!detectionPhase && detectionResult)) && (
-                      <div style={{ padding: "12px 20px 16px" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 6 }}>
-                          {DETECT_SIGNALS.map((sig, idx) => {
-                            const isScanned = scanProgress.includes(sig.id);
-                            const isActive = !isScanned && scanProgress.length === idx;
-                            // Match this source to ALL evidence found for it
-                            const matchedEvidence = (detectionResult?.signals || []).filter(ev =>
-                              (ev.source || "").toLowerCase().includes(sig.id.replace("techstack", "tech").replace("careers", "career")) ||
-                              sig.label.toLowerCase().includes((ev.source || "").toLowerCase().split(" ")[0])
-                            );
-                            const hasHit = matchedEvidence.length > 0;
-                            const isExpanded = expandedSignal === sig.id;
-                            const canExpand = isScanned && detectionPhase !== "scanning" && detectionPhase !== "init";
-                            // Score: 0=no data, 1=searched but nothing, 2=found something, 3=strong signal
-                            const score = !isScanned ? -1 : hasHit ? (matchedEvidence.length >= 2 ? 3 : 2) : matchedEvidence.length === 0 ? 1 : 0;
-                            const scoreLabel = score === 3 ? "STRONG" : score === 2 ? "FOUND" : score === 1 ? "NO DATA" : score === 0 ? "WEAK" : "";
-                            const scoreColor = score === 3 ? "#4ade80" : score === 2 ? "#4ade80" : score === 1 ? "#64748b" : "#64748b";
-                            return (
-                              <div key={sig.id}
-                                onClick={() => canExpand && setExpandedSignal(isExpanded ? null : sig.id)}
-                                style={{
-                                  padding: "8px 10px", borderRadius: 8,
-                                  cursor: canExpand ? "pointer" : "default",
-                                  background: isScanned
-                                    ? (hasHit ? "rgba(74, 222, 128, 0.06)" : "rgba(255,255,255,0.02)")
-                                    : isActive ? `${t.brand}12` : "rgba(255,255,255,0.015)",
-                                  border: `1px solid ${
-                                    isExpanded ? "#4ade80" + "50"
-                                    : isScanned
-                                      ? (hasHit ? "rgba(74, 222, 128, 0.25)" : "rgba(255,255,255,0.05)")
-                                      : isActive ? t.brand + "40" : "rgba(255,255,255,0.04)"
-                                  }`,
-                                  transition: "all 0.3s ease",
-                                  animation: isActive ? "ym-glow 1.5s ease infinite" : "none",
-                                }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <div style={{
-                                    width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                                    background: isScanned ? scoreColor : isActive ? t.brand : "rgba(255,255,255,0.15)",
-                                    boxShadow: isActive ? `0 0 10px ${t.brand}` : isScanned && hasHit ? "0 0 6px #4ade80" : "none",
-                                    transition: "all 0.4s",
-                                  }} />
-                                  <span style={{
-                                    fontSize: 10, fontWeight: 700, fontFamily: "var(--mono)",
-                                    color: isScanned ? scoreColor : isActive ? t.brand : t.textGhost,
-                                  }}>
-                                    {sig.label}
-                                  </span>
-                                  <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: "var(--mono)" }}>
-                                    {isActive && <span style={{ color: t.brand, animation: "ym-pulse 0.8s ease infinite" }}>SCANNING</span>}
-                                    {isScanned && <span style={{ color: scoreColor, fontWeight: 800 }}>{scoreLabel}</span>}
-                                  </span>
-                                </div>
-                                <div style={{ fontSize: 9, color: t.textGhost, marginTop: 2, paddingLeft: 13 }}>
-                                  {sig.desc}
-                                </div>
-                                {/* Expanded detail — shows evidence + URLs */}
-                                {isExpanded && (
-                                  <div style={{
-                                    marginTop: 8, paddingTop: 8, borderTop: `1px solid ${t.border}`,
-                                    animation: "ym-fadeSlide 0.3s ease forwards",
-                                  }}>
-                                    {hasHit ? matchedEvidence.map((ev, ei) => (
-                                      <div key={ei} style={{ marginBottom: ei < matchedEvidence.length - 1 ? 6 : 0 }}>
-                                        <div style={{ fontSize: 10, color: t.textSec, lineHeight: 1.5 }}>
-                                          {ev.detail}
-                                        </div>
-                                        {ev.url && (
-                                          <a href={ev.url} target="_blank" rel="noopener noreferrer"
-                                            onClick={e => e.stopPropagation()}
-                                            style={{ fontSize: 9, color: t.brand, textDecoration: "none", display: "inline-block", marginTop: 2 }}>
-                                            View source
-                                          </a>
-                                        )}
-                                      </div>
-                                    )) : (
-                                      <div style={{ fontSize: 10, color: t.textGhost, fontStyle: "italic" }}>
-                                        No signals found from this source for {selectedCompany}.
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        {/* Progress bar */}
-                        {detectionPhase === "scanning" && (
-                          <div style={{
-                            marginTop: 10, height: 3, borderRadius: 2,
-                            background: "rgba(255,255,255,0.05)", overflow: "hidden",
-                          }}>
-                            <div style={{
-                              height: "100%", borderRadius: 2,
-                              background: `linear-gradient(90deg, ${t.brand}, #4ade80)`,
-                              width: `${Math.round((scanProgress.length / DETECT_SIGNALS.length) * 100)}%`,
-                              transition: "width 0.6s ease",
-                            }} />
-                          </div>
-                        )}
-
-                        {/* Summary score after detection */}
-                        {(detectionPhase === "verdict" || (!detectionPhase && detectionResult)) && detectionResult && (
-                          <div style={{
-                            marginTop: 10, display: "flex", gap: 12, alignItems: "center",
-                            padding: "6px 10px", borderRadius: 6,
-                            background: "rgba(255,255,255,0.02)", border: `1px solid ${t.border}`,
-                          }}>
-                            <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                              Click any signal card above to see evidence details
-                            </span>
-                            {detectionResult.detectedTools?.length > 0 && (
-                              <span style={{ marginLeft: "auto", fontSize: 10, color: t.brand, fontFamily: "var(--mono)", fontWeight: 700 }}>
-                                Tools: {detectionResult.detectedTools.join(", ")}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* EVIDENCE phase — stream of findings */}
-                    {revealedEvidence.length > 0 && (detectionPhase === "evidence" || detectionPhase === "verdict" || !detectionPhase) && (
-                      <div style={{ padding: "0 20px 14px" }}>
-                        <div style={{
-                          fontSize: 10, fontFamily: "var(--mono)", textTransform: "uppercase",
-                          letterSpacing: 1.5, marginBottom: 8, color: "#f59e0b", fontWeight: 700,
-                          display: "flex", alignItems: "center", gap: 8,
-                        }}>
-                          <span>Intelligence Collected</span>
-                          <span style={{
-                            padding: "1px 6px", borderRadius: 8, fontSize: 9,
-                            background: "#f59e0b20", color: "#f59e0b", fontWeight: 800,
-                          }}>
-                            {revealedEvidence.length}
-                          </span>
-                          {detectionResult?.detectedTools?.length > 0 && (
-                            <span style={{ color: t.brand, textTransform: "none", letterSpacing: 0, marginLeft: 4 }}>
-                              Detected: {detectionResult.detectedTools.join(", ")}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                          {revealedEvidence.map((ev, i) => (
-                            <div key={i} style={{
-                              display: "flex", gap: 8, padding: "5px 10px",
-                              background: "rgba(245, 158, 11, 0.04)",
-                              borderLeft: "2px solid #f59e0b30",
-                              borderRadius: "0 6px 6px 0",
-                              animation: "ym-fadeSlide 0.4s ease forwards",
-                            }}>
-                              <span style={{
-                                fontSize: 9, color: "#f59e0b", fontWeight: 800, fontFamily: "var(--mono)",
-                                minWidth: 80, textTransform: "uppercase", paddingTop: 1,
-                              }}>
-                                {ev.source || "signal"}
-                              </span>
-                              <span style={{ fontSize: 11, color: t.textSec, flex: 1, lineHeight: 1.4 }}>
-                                {ev.detail}
-                              </span>
-                              {ev.url && (
-                                <a href={ev.url} target="_blank" rel="noopener noreferrer"
-                                  style={{ fontSize: 9, color: t.brand, textDecoration: "none", flexShrink: 0, paddingTop: 2 }}>
-                                  source
-                                </a>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                        {detectionResult?.reasoning && (detectionPhase === "evidence" || detectionPhase === "verdict") && (
-                          <div style={{
-                            marginTop: 8, padding: "8px 10px", fontSize: 11, color: t.textDim,
-                            fontStyle: "italic", lineHeight: 1.5, borderRadius: 6,
-                            background: "rgba(255,255,255,0.02)", border: `1px solid ${t.border}`,
-                          }}>
-                            {detectionResult.reasoning}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* VERDICT — bucket + rich intelligence (stays visible) */}
-                    {(detectionPhase === "verdict" || (!detectionPhase && detectionResult)) && detectionResult && (() => {
-                      const vBucket = getBucketById(detectionResult.bucketId);
-                      if (!vBucket) return null;
-                      const sevColor = vBucket.severity >= 7 ? "#ef4444" : vBucket.severity >= 4 ? "#f97316" : "#4ade80";
-                      const fitColor = vBucket.sirionFit === "high" ? "#4ade80" : vBucket.sirionFit === "medium" ? "#fbbf24" : "#f87171";
-                      const confColor = detectionResult.confidence >= 0.7 ? "#4ade80" : detectionResult.confidence >= 0.4 ? "#fbbf24" : "#f87171";
-                      const audit = detectionResult.techAudit || {};
-                      const ctx = detectionResult.companyContext || {};
-                      const pitch = detectionResult.pitchAngle || {};
-                      // Collect all non-empty tech categories for display
-                      const techSections = [
-                        { label: "ERP / Core", items: audit.erp || [], color: "#8b5cf6" },
-                        { label: "Procurement", items: audit.procurement || [], color: "#f97316" },
-                        { label: "HR Systems", items: audit.hr || [], color: "#06b6d4" },
-                        { label: "CLM / Contract", items: audit.clm || [], color: "#ef4444" },
-                        { label: "Other Digital", items: audit.other || [], color: "#14b8a6" },
-                        { label: "IT Partners", items: audit.itPartners || [], color: "#a78bfa" },
-                        { label: "Certifications", items: audit.certifications || [], color: "#fbbf24" },
-                      ].filter(s => s.items.length > 0);
-
-                      return (
-                        <div style={{ margin: "0 20px 16px" }}>
-                          {/* Verdict header card */}
-                          <div style={{
-                            padding: 16, borderRadius: "10px 10px 0 0",
-                            background: `linear-gradient(135deg, ${sevColor}08, rgba(139,92,246,0.06), ${fitColor}05)`,
-                            border: `1px solid ${t.brand}30`, borderBottom: "none",
-                            animation: "ym-verdictPop 0.5s ease forwards",
-                          }}>
-                            <div style={{
-                              fontSize: 9, fontFamily: "var(--mono)", textTransform: "uppercase",
-                              letterSpacing: 3, color: "#4ade80", fontWeight: 800, marginBottom: 8,
-                            }}>
-                              CLM MATURITY VERDICT
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-                              <span style={{ fontSize: 16, fontWeight: 900, color: t.text, fontFamily: "var(--mono)" }}>
-                                {vBucket.name}
-                              </span>
-                              <span style={{
-                                padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                                fontFamily: "var(--mono)", textTransform: "uppercase",
-                                background: sevColor + "20", color: sevColor,
-                              }}>
-                                Severity {vBucket.severity}/10
-                              </span>
-                              <span style={{
-                                padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                                fontFamily: "var(--mono)", textTransform: "uppercase",
-                                background: fitColor + "20", color: fitColor,
-                              }}>
-                                Sirion fit: {vBucket.sirionFit}
-                              </span>
-                              <span style={{
-                                padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                                fontFamily: "var(--mono)", textTransform: "uppercase",
-                                background: confColor + "20", color: confColor,
-                              }}>
-                                Confidence: {Math.round(detectionResult.confidence * 100)}%
-                              </span>
-                              {/* Engine indicator */}
-                              {detectionResult.engines && (
-                                <span style={{
-                                  padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                                  fontFamily: "var(--mono)", textTransform: "uppercase",
-                                  background: detectionResult.engines.length > 1 ? "#8b5cf620" : "#06b6d420",
-                                  color: detectionResult.engines.length > 1 ? "#a78bfa" : "#06b6d4",
-                                  display: "flex", alignItems: "center", gap: 4,
-                                }}>
-                                  {detectionResult.engines.length > 1 ? "Dual-Engine" : detectionResult.engines[0]}
-                                  {detectionResult.enginesAgree === true && (
-                                    <span style={{ color: "#4ade80" }}>AGREE</span>
-                                  )}
-                                  {detectionResult.enginesAgree === false && (
-                                    <span style={{ color: "#f59e0b" }}>DIVERGED</span>
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)", marginBottom: 10 }}>
-                              <div style={{
-                                height: "100%", borderRadius: 2,
-                                background: `linear-gradient(90deg, ${confColor}, ${t.brand})`,
-                                width: `${Math.round(detectionResult.confidence * 100)}%`,
-                                animation: "ym-fillBar 1s ease forwards",
-                              }} />
-                            </div>
-                            {/* Dual-engine per-engine breakdown */}
-                            {detectionResult.engines?.length > 1 && detectionResult.claudeBucket && detectionResult.grokBucket && (
-                              <div style={{
-                                display: "flex", gap: 8, marginBottom: 8,
-                                padding: "6px 8px", borderRadius: 6,
-                                background: "rgba(139,92,246,0.04)", border: `1px solid ${t.brand}15`,
-                              }}>
-                                <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span style={{ fontSize: 9, fontWeight: 800, color: "#06b6d4", fontFamily: "var(--mono)" }}>CLAUDE:</span>
-                                  <span style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>
-                                    {detectionResult.claudeBucket.name || detectionResult.claudeBucket.id} ({Math.round(detectionResult.claudeBucket.confidence * 100)}%)
-                                  </span>
-                                </div>
-                                <div style={{ width: 1, background: t.border }} />
-                                <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span style={{ fontSize: 9, fontWeight: 800, color: "#a78bfa", fontFamily: "var(--mono)" }}>GROK:</span>
-                                  <span style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>
-                                    {detectionResult.grokBucket.name || detectionResult.grokBucket.id} ({Math.round(detectionResult.grokBucket.confidence * 100)}%)
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-                            {detectionResult.reasoning && (
-                              <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.6, marginBottom: 6 }}>
-                                {detectionResult.reasoning}
-                              </div>
-                            )}
-                            <div style={{ fontSize: 11, color: t.text, lineHeight: 1.5, fontStyle: "italic", opacity: 0.8 }}>
-                              {vBucket.attackAngle}
-                            </div>
-                          </div>
-
-                          {/* Company Context + Tech Audit grid */}
-                          {(techSections.length > 0 || ctx.parentCompany || ctx.digitalMaturity) && (
-                            <div style={{
-                              padding: "14px 16px", border: `1px solid ${t.brand}20`,
-                              borderTop: `1px solid ${t.brand}15`,
-                              background: "rgba(255,255,255,0.015)",
-                            }}>
-                              {/* Company context row */}
-                              {(ctx.parentCompany || ctx.digitalMaturity) && (
-                                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: techSections.length > 0 ? 12 : 0 }}>
-                                  {ctx.parentCompany && (
-                                    <div style={{
-                                      padding: "6px 10px", borderRadius: 6, background: "rgba(139,92,246,0.06)",
-                                      border: `1px solid ${t.brand}20`,
-                                    }}>
-                                      <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Parent Company</div>
-                                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>{ctx.parentCompany}</div>
-                                      {ctx.parentTechArm && (
-                                        <div style={{ fontSize: 10, color: t.brand, marginTop: 2 }}>Tech arm: {ctx.parentTechArm}</div>
-                                      )}
-                                    </div>
-                                  )}
-                                  {ctx.digitalMaturity && ctx.digitalMaturity !== "unknown" && (
-                                    <div style={{
-                                      padding: "6px 10px", borderRadius: 6, background: "rgba(20,184,166,0.06)",
-                                      border: `1px solid rgba(20,184,166,0.2)`,
-                                    }}>
-                                      <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Digital Maturity</div>
-                                      <div style={{
-                                        fontSize: 12, fontWeight: 700, textTransform: "capitalize",
-                                        color: ctx.digitalMaturity === "advanced" || ctx.digitalMaturity === "mature" ? "#4ade80"
-                                          : ctx.digitalMaturity === "growing" ? "#fbbf24" : "#f87171",
-                                      }}>
-                                        {ctx.digitalMaturity}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {ctx.industry && (
-                                    <div style={{
-                                      padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)",
-                                      border: `1px solid ${t.border}`,
-                                    }}>
-                                      <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Industry</div>
-                                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>{ctx.industry}</div>
-                                    </div>
-                                  )}
-                                  {ctx.size && ctx.size !== "unknown" && (
-                                    <div style={{
-                                      padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)",
-                                      border: `1px solid ${t.border}`,
-                                    }}>
-                                      <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Company Size</div>
-                                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text, textTransform: "capitalize" }}>{ctx.size}</div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Tech Audit — discovered systems */}
-                              {techSections.length > 0 && (
-                                <div>
-                                  <div style={{
-                                    fontSize: 9, fontFamily: "var(--mono)", textTransform: "uppercase",
-                                    letterSpacing: 1.5, color: t.textGhost, fontWeight: 700, marginBottom: 8,
-                                  }}>
-                                    Discovered Technology Stack
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                                    {techSections.map(sec => (
-                                      <div key={sec.label} style={{
-                                        padding: "6px 10px", borderRadius: 6,
-                                        background: sec.color + "08", border: `1px solid ${sec.color}25`,
-                                        flex: "1 1 auto", minWidth: 140,
-                                      }}>
-                                        <div style={{
-                                          fontSize: 8, color: sec.color, fontFamily: "var(--mono)",
-                                          textTransform: "uppercase", letterSpacing: 1, fontWeight: 800, marginBottom: 4,
-                                        }}>
-                                          {sec.label}
-                                        </div>
-                                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                                          {sec.items.map((item, ii) => (
-                                            <span key={ii} style={{
-                                              padding: "2px 6px", borderRadius: 4, fontSize: 10,
-                                              fontWeight: 600, color: t.text,
-                                              background: sec.color + "15", fontFamily: "var(--mono)",
-                                            }}>
-                                              {item}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Key contracts */}
-                              {ctx.keyContracts && (
-                                <div style={{
-                                  marginTop: 10, padding: "6px 10px", borderRadius: 6,
-                                  background: "rgba(255,255,255,0.02)", border: `1px solid ${t.border}`,
-                                }}>
-                                  <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Notable Contracts / Deals</div>
-                                  <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.5, marginTop: 3 }}>{ctx.keyContracts}</div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Pitch Angle — Sirion entry strategy */}
-                          {(pitch.entryPoint || pitch.narrative) && (
-                            <div style={{
-                              padding: "14px 16px", borderRadius: "0 0 10px 10px",
-                              background: `linear-gradient(135deg, rgba(74,222,128,0.04), rgba(139,92,246,0.04))`,
-                              border: `1px solid ${t.brand}20`, borderTop: `1px solid ${t.brand}15`,
-                            }}>
-                              <div style={{
-                                fontSize: 9, fontFamily: "var(--mono)", textTransform: "uppercase",
-                                letterSpacing: 1.5, color: "#4ade80", fontWeight: 800, marginBottom: 8,
-                              }}>
-                                Sirion Entry Strategy
-                              </div>
-                              {pitch.entryPoint && (
-                                <div style={{ marginBottom: 6 }}>
-                                  <span style={{
-                                    fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)",
-                                    textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6,
-                                  }}>Entry Point:</span>
-                                  <span style={{ fontSize: 12, fontWeight: 700, color: t.text }}>{pitch.entryPoint}</span>
-                                </div>
-                              )}
-                              {pitch.quickWin && (
-                                <div style={{ marginBottom: 6 }}>
-                                  <span style={{
-                                    fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)",
-                                    textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6,
-                                  }}>Quick Win:</span>
-                                  <span style={{ fontSize: 12, fontWeight: 600, color: "#4ade80" }}>{pitch.quickWin}</span>
-                                </div>
-                              )}
-                              {pitch.narrative && (
-                                <div style={{
-                                  fontSize: 12, color: t.textSec, lineHeight: 1.6,
-                                  padding: "8px 12px", borderRadius: 6,
-                                  background: "rgba(74,222,128,0.04)", border: `1px solid rgba(74,222,128,0.15)`,
-                                  marginTop: 4,
-                                }}>
-                                  {pitch.narrative}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {/* ═══════════════════════════════════════════════════════════════
-                    STATIC BUCKET RESULT BAR (when no detection running)
-                    ═══════════════════════════════════════════════════════════════ */}
-                {selectedCompany && !detectionPhase && !detectionResult && (
-                  <div style={{
-                    padding: "12px 18px", marginBottom: 20,
-                    background: activeBucket
-                      ? `linear-gradient(135deg, ${activeBucket.severity >= 7 ? "#ef444408" : activeBucket.severity >= 4 ? "#f9731608" : "#4ade8008"}, ${t.bgCard})`
-                      : t.bgCard,
-                    border: `1px solid ${t.border}`, borderTop: "none", borderRadius: "0 0 10px 10px",
-                  }}>
-                    {/* Error */}
-                    {bucketDetectionError && !bucketDetecting && (
-                      <div style={{ padding: "6px 0", fontSize: 12, color: "#f87171", fontFamily: "var(--mono)" }}>
-                        Detection error: {bucketDetectionError}
-                      </div>
-                    )}
-
-                    {/* No bucket yet */}
-                    {!activeBucketId && !bucketDetecting && !bucketDetectionError && (
-                      <div style={{ padding: "8px 0", fontSize: 12, color: t.textDim, lineHeight: 1.6 }}>
-                        Click <strong style={{ color: t.brand }}>Detect CLM Maturity</strong> to let AI research {selectedCompany}'s tech stack across job postings, G2 reviews, vendor pages, and more. Or use the manual override dropdown.
-                      </div>
-                    )}
-
-                    {/* Bucket result (from previous detection or manual) */}
-                    {activeBucket && !bucketDetecting && (
-                      <div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
-                          <span style={{ fontSize: 15, fontWeight: 800, color: t.text, fontFamily: "var(--mono)" }}>
-                            {activeBucket.name}
-                          </span>
-                          <span style={{
-                            padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                            fontFamily: "var(--mono)", textTransform: "uppercase",
-                            background: activeBucket.severity >= 7 ? "#ef444425" : activeBucket.severity >= 4 ? "#f9731625" : "#4ade8025",
-                            color: activeBucket.severity >= 7 ? "#ef4444" : activeBucket.severity >= 4 ? "#f97316" : "#4ade80",
-                          }}>
-                            Severity {activeBucket.severity}/10
-                          </span>
-                          <span style={{
-                            padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                            fontFamily: "var(--mono)", textTransform: "uppercase",
-                            background: activeBucket.sirionFit === "high" ? "#4ade8025" : activeBucket.sirionFit === "medium" ? "#fbbf2425" : "#f8717125",
-                            color: activeBucket.sirionFit === "high" ? "#4ade80" : activeBucket.sirionFit === "medium" ? "#fbbf24" : "#f87171",
-                          }}>
-                            Sirion fit: {activeBucket.sirionFit}
-                          </span>
-                          {m4Detected && !yinBucketId && (
-                            <span style={{
-                              padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
-                              fontFamily: "var(--mono)", textTransform: "uppercase",
-                              background: m4Detected.confidence >= 0.7 ? "#4ade8025" : m4Detected.confidence >= 0.4 ? "#fbbf2425" : "#f8717125",
-                              color: m4Detected.confidence >= 0.7 ? "#4ade80" : m4Detected.confidence >= 0.4 ? "#fbbf24" : "#f87171",
-                            }}>
-                              AI confidence: {Math.round(m4Detected.confidence * 100)}%
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.5, marginBottom: 6 }}>
-                          {activeBucket.attackAngle}
-                        </div>
-                        {/* Collapsed evidence summary */}
-                        {m4Detected?.signals?.length > 0 && !yinBucketId && (
-                          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${t.border}` }}>
-                            <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                              {m4Detected.signals.length} signals collected
-                              {m4Detected.detectedTools?.length > 0 && (
-                                <span style={{ marginLeft: 8, color: t.brand }}>
-                                  Tools: {m4Detected.detectedTools.join(", ")}
-                                </span>
-                              )}
-                              {m4Detected.detectedAt && (
-                                <span style={{ marginLeft: 8, color: t.textGhost }}>
-                                  {new Date(m4Detected.detectedAt).toLocaleDateString()}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Empty state — no company */}
-                {!selectedCompany && (
-                  <div style={{
-                    padding: "40px 20px", textAlign: "center", background: t.bgCard,
-                    border: `1px dashed ${t.border}`, borderRadius: 10, color: t.textDim,
-                  }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>No company data yet</div>
-                    <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                      Go to the <strong>Persona Research</strong> tab and add decision-maker profiles.
-                      <br />Each profile needs a company name to appear here.
-                    </div>
-                  </div>
-                )}
-
-                {/* PERSONA-PAIN GRID — "How much does this persona care about this pain category?" */}
-                {painGrid && painGrid.categories.length > 0 && companyPersonas.length > 0 && (
-                  <div style={{ marginBottom: 20 }}>
-                    {/* Legend */}
-                    <div style={{
-                      display: "flex", gap: 16, alignItems: "center", marginBottom: 8,
-                      padding: "8px 14px", background: t.bgCard, border: `1px solid ${t.border}`,
-                      borderRadius: "10px 10px 0 0",
-                    }}>
-                      <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
-                        Pain relevance per persona:
-                      </span>
-                      {[
-                        { label: "CRITICAL", color: "#ef4444", desc: "Top priority pain" },
-                        { label: "HIGH", color: "#f59e0b", desc: "Strong concern" },
-                        { label: "MODERATE", color: "#64748b", desc: "Aware but not primary" },
-                      ].map(l => (
-                        <span key={l.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: 2, background: l.color, display: "inline-block" }} />
-                          <span style={{ fontSize: 9, color: l.color, fontFamily: "var(--mono)", fontWeight: 700 }}>{l.label}</span>
-                        </span>
-                      ))}
-                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 2, background: "rgba(255,255,255,0.1)", display: "inline-block" }} />
-                        <span style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>NOT A FACTOR</span>
-                      </span>
-                    </div>
-                    <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ ...thStyle(t), textAlign: "left", width: "22%", minWidth: 160 }}>Decision Maker</th>
-                          {painGrid.categories.map(cat => (
-                            <th key={cat} style={{ ...thStyle(t), textAlign: "center", fontSize: 10, lineHeight: 1.3, padding: "10px 6px" }}>
-                              <div style={{ color: PAIN_CATEGORIES[cat]?.color || t.textSec }}>{PAIN_CATEGORIES[cat]?.label || cat}</div>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {painGrid.grid.map((row, ri) => {
-                          const persona = gridPersonas[ri];
-                          const pDef = PERSONAS.find(p => p.id === persona.personaType);
-                          return (
-                            <Fragment key={persona.id}>
-                              <tr style={{ borderBottom: `1px solid ${t.border}` }}
-                                onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
-                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                                <td style={{ padding: "10px 14px", verticalAlign: "top" }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                                    {pDef?.avatar && (
-                                      <img src={pDef.avatar} alt="" style={{ width: 28, height: 28, borderRadius: "50%", border: `2px solid ${t.brand}40` }} />
-                                    )}
-                                    <div>
-                                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{persona.name}</div>
-                                      <div style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)" }}>{persona.title || pDef?.label}</div>
-                                    </div>
-                                  </div>
-                                  {persona.psycheProfile?.decisionStyle && (
-                                    <div style={{ fontSize: 10, color: t.textGhost, lineHeight: 1.4, marginTop: 4 }}>
-                                      {persona.psycheProfile.decisionStyle.slice(0, 80)}{persona.psycheProfile.decisionStyle.length > 80 ? "..." : ""}
-                                    </div>
-                                  )}
-                                </td>
-                                {row.map(cell => {
-                                  const cellKey = `${persona.id}:${cell.category}`;
-                                  const isExp = expandedPainCell === cellKey;
-                                  const w = cell.weight;
-                                  // Severity label + color system
-                                  const sevLabel = w >= 0.7 ? "CRITICAL" : w >= 0.4 ? "HIGH" : w > 0 ? "MODERATE" : "";
-                                  const sevColor = w >= 0.7 ? "#ef4444" : w >= 0.4 ? "#f59e0b" : w > 0 ? "#64748b" : "transparent";
-                                  const barBg = w >= 0.7 ? "#ef444425" : w >= 0.4 ? "#f59e0b25" : w > 0 ? "rgba(255,255,255,0.08)" : "transparent";
-                                  const cellBg = w >= 0.7 ? "#ef444408" : w >= 0.4 ? "#f59e0b08" : "transparent";
-                                  return (
-                                    <td key={cell.category}
-                                      onClick={() => w > 0 && setExpandedPainCell(isExp ? null : cellKey)}
-                                      style={{
-                                        padding: "10px 8px", textAlign: "center", background: cellBg,
-                                        cursor: w > 0 ? "pointer" : "default", verticalAlign: "middle",
-                                        transition: "background 0.15s",
-                                      }}>
-                                      {w > 0 ? (
-                                        <div style={{ minWidth: 70 }}>
-                                          {/* Severity label */}
-                                          <div style={{
-                                            fontSize: 9, fontWeight: 800, fontFamily: "var(--mono)",
-                                            color: sevColor, letterSpacing: 0.5, marginBottom: 4,
-                                          }}>
-                                            {sevLabel}
-                                          </div>
-                                          {/* Visual bar */}
-                                          <div style={{
-                                            height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)",
-                                            overflow: "hidden", marginBottom: 3,
-                                          }}>
-                                            <div style={{
-                                              height: "100%", borderRadius: 3, background: sevColor,
-                                              width: `${Math.round(w * 100)}%`, transition: "width 0.4s",
-                                            }} />
-                                          </div>
-                                          {/* Subtle percentage + click hint */}
-                                          <div style={{ fontSize: 8, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                                            {isExp ? "click to close" : `${(cell.pains || []).length} pain${(cell.pains || []).length !== 1 ? "s" : ""}`}
-                                          </div>
-                                        </div>
-                                      ) : (
-                                        <div style={{ minWidth: 70 }}>
-                                          <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>--</div>
-                                          <div style={{
-                                            height: 6, borderRadius: 3, background: "rgba(255,255,255,0.03)",
-                                            marginTop: 4, marginBottom: 3,
-                                          }} />
-                                          <div style={{ fontSize: 8, color: "transparent" }}>.</div>
-                                        </div>
-                                      )}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                              {/* Expanded pain detail row */}
-                              {row.some(cell => expandedPainCell === `${persona.id}:${cell.category}`) && (() => {
-                                const expCell = row.find(cell => expandedPainCell === `${persona.id}:${cell.category}`);
-                                if (!expCell) return null;
-                                const catInfo = PAIN_CATEGORIES[expCell.category];
-                                const relevantPains = expCell.pains || [];
-                                return (
-                                  <tr style={{ borderBottom: `1px solid ${t.border}` }}>
-                                    <td colSpan={painGrid.categories.length + 1} style={{
-                                      padding: "12px 16px",
-                                      background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
-                                    }}>
-                                      <div style={{ fontSize: 11, fontWeight: 700, color: catInfo?.color || t.brand, marginBottom: 8, fontFamily: "var(--mono)", textTransform: "uppercase" }}>
-                                        {catInfo?.label} -- Pains for {persona.name}
-                                      </div>
-                                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                        {relevantPains.map(pain => (
-                                          <div key={pain.id} style={{
-                                            padding: "10px 14px", borderRadius: 8,
-                                            background: t.bgCard, border: `1px solid ${t.border}`,
-                                          }}>
-                                            <div style={{ fontSize: 12, fontWeight: 600, color: t.text, marginBottom: 4, lineHeight: 1.4 }}>
-                                              {pain.painText}
-                                            </div>
-                                            <div style={{ fontSize: 11, color: "#f87171", marginBottom: 4, lineHeight: 1.4 }}>
-                                              Impact: {pain.businessImpact}
-                                            </div>
-                                            <div style={{ fontSize: 11, color: "#4ade80", lineHeight: 1.4 }}>
-                                              Sirion: {pain.sirionSolution}
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })()}
-                            </Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  </div>
-                )}
-
-                {/* CONNECTING THREAD */}
-                {painGrid?.connectingThread && (
-                  <div style={{
-                    padding: "18px 22px", marginBottom: 20, borderRadius: 10,
-                    background: `linear-gradient(135deg, ${painGrid.connectingThread.categoryInfo?.color || t.brand}15, ${t.bgCard})`,
-                    border: `1px solid ${painGrid.connectingThread.categoryInfo?.color || t.brand}40`,
-                  }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8 }}>
-                      Connecting Thread
-                    </div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: t.text, marginBottom: 8, lineHeight: 1.3 }}>
-                      The pain that connects your entire buying committee is:{" "}
-                      <span style={{ color: painGrid.connectingThread.categoryInfo?.color || t.brand }}>
-                        {painGrid.connectingThread.categoryInfo?.label}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: t.textSec, lineHeight: 1.6, marginBottom: 12 }}>
-                      This is your core messaging angle. Every persona in the committee feels this pain -- lead with it in coordinated outreach.
-                    </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {Object.entries(painGrid.connectingThread.perPersona).map(([pt, w]) => {
-                        const pDef = PERSONAS.find(p => p.id === pt);
-                        return (
-                          <span key={pt} style={{
-                            padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                            fontFamily: "var(--mono)", border: `1px solid ${t.border}`,
-                            background: w >= 0.7 ? "#4ade8015" : w >= 0.4 ? "#fbbf2415" : t.bgCard,
-                            color: w >= 0.7 ? "#4ade80" : w >= 0.4 ? "#fbbf24" : t.textDim,
-                          }}>
-                            {pDef?.short || pt} {Math.round(w * 100)}%
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* COMMITTEE READINESS (if M4 data exists) */}
-                {companyAnalyses.length > 0 && (
-                  <div style={{
-                    padding: "16px 20px", borderRadius: 10,
-                    background: t.bgCard, border: `1px solid ${t.border}`, marginBottom: 20,
-                  }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>
-                      Committee Readiness (from M4 analysis)
-                    </div>
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      {companyAnalyses.map((a, i) => {
-                        const readiness = a.readinessScore ?? a.overallReadiness ?? 0;
-                        const stage = a.stage || a.buyingStage || "Unknown";
-                        return (
-                          <div key={i} style={{
-                            padding: "10px 14px", borderRadius: 8, minWidth: 140,
-                            background: t.mode === "dark" ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)",
-                            border: `1px solid ${t.border}`,
-                          }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 4 }}>
-                              {a.name || a.metadata?.name || `Prospect ${i + 1}`}
-                            </div>
-                            <div style={{ fontSize: 10, color: t.textSec, fontFamily: "var(--mono)", marginBottom: 6 }}>
-                              {a.title || a.metadata?.title || ""}
-                            </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              <span style={{
-                                fontSize: 14, fontWeight: 900, fontFamily: "var(--mono)",
-                                color: readiness >= 70 ? "#4ade80" : readiness >= 40 ? "#fbbf24" : "#f87171",
-                              }}>
-                                {readiness}%
-                              </span>
-                              <span style={{
-                                padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
-                                fontFamily: "var(--mono)", textTransform: "uppercase",
-                                background: t.border + "60", color: t.textSec,
-                              }}>
-                                {stage}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {/* Overall readiness summary */}
-                    {(() => {
-                      const avg = Math.round(companyAnalyses.reduce((s, a) => s + (a.readinessScore ?? a.overallReadiness ?? 0), 0) / companyAnalyses.length);
-                      const status = avg >= 60 ? "Ready to engage" : avg >= 35 ? "Needs nurturing" : "Too early";
-                      const statusColor = avg >= 60 ? "#4ade80" : avg >= 35 ? "#fbbf24" : "#f87171";
-                      return (
-                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 12 }}>
-                          <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Account readiness:</span>
-                          <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)", color: statusColor }}>{avg}%</span>
-                          <span style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)", background: statusColor + "20", color: statusColor }}>
-                            {status}
-                          </span>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {/* Generate Narrative placeholder */}
-                {painGrid?.connectingThread && (
-                  <div style={{
-                    padding: "14px 18px", borderRadius: 10,
-                    background: t.bgCard, border: `1px dashed ${t.border}`,
-                    display: "flex", alignItems: "center", gap: 14,
-                  }}>
-                    <button disabled style={{
-                      padding: "8px 16px", borderRadius: 8, border: `1px solid ${t.border}`,
-                      background: t.mode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
-                      color: t.textDim, fontSize: 12, fontWeight: 700, fontFamily: "var(--mono)",
-                      cursor: "not-allowed", opacity: 0.6,
-                    }}>
-                      Generate Narrative
-                    </button>
-                    <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>
-                      Coming soon -- AI will generate a unified pain narrative connecting all personas for coordinated outreach messaging.
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* ── EVALUATION SCORECARD VIEW (original Decision Matrix) ── */}
-          {matrixView === "scorecard" && (() => {
-            // Original scorecard code preserved
+          {/* Matrix table */}
+          {(() => {
             const criteria = DECISION_CRITERIA[activeMatrixPersona] || [];
             const personaLabel = PERSONAS.find(p => p.id === activeMatrixPersona)?.label || "";
             const qForPersona = questions.filter(q => q.persona === activeMatrixPersona);
             const enrichedCount = qForPersona.filter(q => q.personaFit != null).length;
 
             return (
-              <div>
-                <div style={{ marginBottom: 20 }}>
-                  <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: t.text }}>Evaluation Scorecard</h2>
-                  <p style={{ margin: 0, fontSize: 13, color: t.textSec, lineHeight: 1.6 }}>
-                    Per-persona evaluation criteria. Score Sirion 1-10 on each criterion.
-                  </p>
-                </div>
-                {/* Persona selector */}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
-                  {PERSONAS.map(p => (
-                    <button key={p.id} onClick={() => setActiveMatrixPersona(p.id)} style={{
-                      padding: "8px 16px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 700,
-                      fontFamily: "var(--mono)", border: `1px solid ${activeMatrixPersona === p.id ? t.brand + "60" : t.border}`,
-                      background: activeMatrixPersona === p.id ? t.brand + "15" : "transparent",
-                      color: activeMatrixPersona === p.id ? t.brand : t.textDim, transition: "all 0.15s",
-                    }}>
-                      {p.icon} {p.short}
-                    </button>
-                  ))}
-                </div>
-                {/* Summary bar + Auto-grade */}
+              <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Summary bar */}
                 <div style={{
                   display: "flex", gap: 20, padding: "12px 18px", marginBottom: 16,
                   background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8,
                   flexWrap: "wrap", alignItems: "center",
                 }}>
                   <div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: t.brand, fontFamily: "var(--mono)", lineHeight: 1 }}>{qForPersona.length}</div>
-                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Questions</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: "#fbbf24", fontFamily: "var(--mono)", lineHeight: 1 }}>{enrichedCount}</div>
-                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Enriched</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: "#4ade80", fontFamily: "var(--mono)", lineHeight: 1 }}>{criteria.length}</div>
-                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Criteria</div>
-                  </div>
-                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-                    <div style={{ textAlign: "right" }}>
-                      <button onClick={handleAutoGrade} disabled={autoGrading} style={{
-                        padding: "7px 14px", borderRadius: 8, border: `1px solid ${t.brand}50`,
-                        background: autoGrading ? t.brand + "20" : t.brand + "12",
-                        color: t.brand, fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
-                        cursor: autoGrading ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-                      }}>
-                        {autoGrading ? "Grading..." : "AI Auto-Grade"}
-                      </button>
-                      <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
-                        {autoGradeSource ? `${autoGradeSource.count} scored` : "Uses M2 scan data"}
-                      </div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: t.brand, fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {qForPersona.length}
                     </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Questions
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#fbbf24", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {enrichedCount}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Enriched
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#4ade80", fontFamily: "var(--mono)", lineHeight: 1 }}>
+                      {criteria.length}
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                      Criteria
+                    </div>
+                  </div>
+                  {/* Overall score + auto-grade button */}
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+                    {/* Auto-grade button */}
+                    <div style={{ textAlign: "right" }}>
+                      <button
+                        onClick={handleAutoGrade}
+                        disabled={autoGrading}
+                        title="Auto-score every criterion using your M2 scan results — no manual input needed"
+                        style={{
+                          padding: "7px 14px", borderRadius: 8, border: `1px solid ${t.brand}50`,
+                          background: autoGrading ? t.brand + "20" : t.brand + "12",
+                          color: t.brand, fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)",
+                          cursor: autoGrading ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                        }}
+                      >
+                        {autoGrading ? "⏳ Grading…" : "✨ AI Auto-Grade"}
+                      </button>
+                      {autoGradeSource && (
+                        <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                          {autoGradeSource.count} criteria scored · {autoGradeSource.scoredAt}
+                        </div>
+                      )}
+                      {!autoGradeSource && (
+                        <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                          Uses your M2 scan data
+                        </div>
+                      )}
+                    </div>
+                    {/* Weighted score */}
                     {(() => {
                       const scored = criteria.filter(c => decisionScores[`${activeMatrixPersona}.${c.id}`] != null);
                       if (scored.length === 0) return null;
@@ -5494,19 +4300,26 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                       const pct = Math.round((weightedSum / maxSum) * 100);
                       return (
                         <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1, color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171" }}>{pct}%</div>
-                          <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>Weighted Score</div>
+                          <div style={{
+                            fontSize: 24, fontWeight: 900, fontFamily: "var(--mono)", lineHeight: 1,
+                            color: pct >= 70 ? "#4ade80" : pct >= 50 ? "#fbbf24" : "#f87171",
+                          }}>
+                            {pct}%
+                          </div>
+                          <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: 1 }}>
+                            Weighted Score
+                          </div>
                         </div>
                       );
                     })()}
                   </div>
                 </div>
-                {/* Scorecard table */}
+
                 <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thStyle(t), textAlign: "left", width: "32%" }}>Criterion -- {personaLabel}</th>
+                        <th style={{ ...thStyle(t), textAlign: "left", width: "32%" }}>Criterion — {personaLabel}</th>
                         <th style={thStyle(t)}>Priority</th>
                         <th style={thStyle(t)}>Questions</th>
                         <th style={thStyle(t)}>Sirion Score</th>
@@ -5520,58 +4333,171 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                         const qCount = questions.filter(q => q.criterion === key).length;
                         const gap = score != null ? Math.max(0, c.weight - score) : null;
                         const gapColor = gap == null ? t.textGhost : gap <= 1 ? "#4ade80" : gap <= 3 ? "#fbbf24" : "#f87171";
+
                         const isExpanded = expandedCriterion === key;
                         const criterionQs = questions.filter(q => q.criterion === key);
                         return (
                           <Fragment key={c.id}>
-                            <tr style={{ borderBottom: isExpanded ? "none" : `1px solid ${t.border}` }}
-                              onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
-                              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                              <td style={{ padding: "12px 16px", color: t.text, fontWeight: 500, lineHeight: 1.4 }}>{c.label}</td>
-                              <td style={{ padding: "12px 8px", textAlign: "center" }}>
-                                <div style={{ display: "flex", justifyContent: "center", gap: 2 }}>
-                                  {Array.from({ length: 10 }).map((_, i) => (
-                                    <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: i < c.weight ? (c.weight >= 8 ? "#f87171" : c.weight >= 6 ? "#fbbf24" : "#67e8f9") : t.border }} />
+                          <tr style={{ borderBottom: isExpanded ? "none" : `1px solid ${t.border}`, transition: "background 0.1s" }}
+                            onMouseEnter={e => e.currentTarget.style.background = t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.01)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            <td style={{ padding: "12px 16px", color: t.text, fontWeight: 500, lineHeight: 1.4 }}>
+                              {c.label}
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <div style={{ display: "flex", justifyContent: "center", gap: 2 }}>
+                                {Array.from({ length: 10 }).map((_, i) => (
+                                  <div key={i} style={{
+                                    width: 5, height: 5, borderRadius: "50%",
+                                    background: i < c.weight
+                                      ? (c.weight >= 8 ? "#f87171" : c.weight >= 6 ? "#fbbf24" : "#67e8f9")
+                                      : t.border,
+                                  }} />
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>
+                                {c.weight}/10
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <button
+                                onClick={() => setExpandedCriterion(isExpanded ? null : key)}
+                                title={qCount > 0 ? "Click to see questions" : "No questions yet"}
+                                style={{
+                                  background: "none", border: "none", cursor: qCount > 0 ? "pointer" : "default",
+                                  padding: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                                }}
+                              >
+                                <span style={{
+                                  fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                  color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171",
+                                  textDecoration: qCount > 0 ? "underline dotted" : "none",
+                                }}>
+                                  {qCount}
+                                </span>
+                                {qCount === 0 && (
+                                  <div style={{ fontSize: 9, color: "#f87171", fontFamily: "var(--mono)" }}>no coverage</div>
+                                )}
+                                {qCount > 0 && (
+                                  <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>{isExpanded ? "▲ hide" : "▼ show"}</div>
+                                )}
+                              </button>
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              <input
+                                type="number" min="1" max="10"
+                                value={score ?? ""}
+                                placeholder="—"
+                                onChange={e => {
+                                  const v = parseInt(e.target.value);
+                                  setDecisionScores(prev => {
+                                    const next = { ...prev, [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)) };
+                                    try { localStorage.setItem("xt_decision_scores", JSON.stringify(next)); } catch {}
+                                    return next;
+                                  });
+                                }}
+                                style={{
+                                  width: 48, padding: "4px 6px", borderRadius: 6, textAlign: "center",
+                                  border: `1px solid ${score != null ? t.brand + "50" : t.border}`,
+                                  background: score != null ? t.brand + "08" : t.inputBg,
+                                  color: score != null ? t.brand : t.textDim,
+                                  fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)",
+                                  outline: "none",
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                              {gap != null ? (
+                                <span style={{
+                                  fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)", color: gapColor,
+                                }}>
+                                  {gap === 0 ? "✓" : `-${gap}`}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                          {isExpanded && criterionQs.length > 0 && (
+                            <tr style={{ borderBottom: `1px solid ${t.border}` }}>
+                              <td colSpan={5} style={{ padding: "0 16px 14px", background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 8 }}>
+                                  {criterionQs.map((q, i) => (
+                                    <div key={q.id || i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 12px", borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
+                                      <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", minWidth: 20, paddingTop: 1 }}>{i + 1}.</span>
+                                      <span style={{ fontSize: 13, color: t.text, lineHeight: 1.5, flex: 1 }}>{q.query}</span>
+                                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                                        {q.stage && (
+                                          <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: t.textSec, background: t.border + "60", borderRadius: 4, padding: "2px 6px" }}>
+                                            {q.stage}
+                                          </span>
+                                        )}
+                                        {q.classification && (
+                                          <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: q.classification === "macro" ? "#67e8f9" : t.brand, background: (q.classification === "macro" ? "#67e8f9" : t.brand) + "18", borderRadius: 4, padding: "2px 6px" }}>
+                                            {q.classification}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
                                   ))}
                                 </div>
-                                <div style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 3 }}>{c.weight}/10</div>
-                              </td>
-                              <td style={{ padding: "12px 8px", textAlign: "center" }}>
-                                <button onClick={() => setExpandedCriterion(isExpanded ? null : key)} style={{ background: "none", border: "none", cursor: qCount > 0 ? "pointer" : "default", padding: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                                  <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)", color: qCount >= 3 ? "#4ade80" : qCount >= 1 ? "#fbbf24" : "#f87171", textDecoration: qCount > 0 ? "underline dotted" : "none" }}>{qCount}</span>
-                                  {qCount > 0 && <div style={{ fontSize: 9, color: t.textGhost, fontFamily: "var(--mono)" }}>{isExpanded ? "hide" : "show"}</div>}
-                                </button>
-                              </td>
-                              <td style={{ padding: "12px 8px", textAlign: "center" }}>
-                                <input type="number" min="1" max="10" value={score ?? ""} placeholder="-"
-                                  onChange={e => { const v = parseInt(e.target.value); setDecisionScores(prev => { const next = { ...prev, [key]: isNaN(v) ? undefined : Math.min(10, Math.max(1, v)) }; try { localStorage.setItem("xt_decision_scores", JSON.stringify(next)); } catch {} return next; }); }}
-                                  style={{ width: 48, padding: "4px 6px", borderRadius: 6, textAlign: "center", border: `1px solid ${score != null ? t.brand + "50" : t.border}`, background: score != null ? t.brand + "08" : t.inputBg, color: score != null ? t.brand : t.textDim, fontSize: 14, fontWeight: 800, fontFamily: "var(--mono)", outline: "none" }}
-                                />
-                              </td>
-                              <td style={{ padding: "12px 8px", textAlign: "center" }}>
-                                {gap != null ? <span style={{ fontSize: 13, fontWeight: 800, fontFamily: "var(--mono)", color: gapColor }}>{gap === 0 ? "ok" : `-${gap}`}</span> : <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>--</span>}
                               </td>
                             </tr>
-                            {isExpanded && criterionQs.length > 0 && (
-                              <tr style={{ borderBottom: `1px solid ${t.border}` }}>
-                                <td colSpan={5} style={{ padding: "0 16px 14px", background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)" }}>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 8 }}>
-                                    {criterionQs.map((q, i) => (
-                                      <div key={q.id || i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 12px", borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
-                                        <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", minWidth: 20, paddingTop: 1 }}>{i + 1}.</span>
-                                        <span style={{ fontSize: 13, color: t.text, lineHeight: 1.5, flex: 1 }}>{q.query}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
+                          )}
                           </Fragment>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
+
+                {/* Gap legend */}
+                <div style={{ display: "flex", gap: 16, marginTop: 12, padding: "10px 16px", background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8 }}>
+                  <span style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)" }}>Gap =</span>
+                  <span style={{ fontSize: 11, color: "#4ade80", fontFamily: "var(--mono)" }}>✓ Covered</span>
+                  <span style={{ fontSize: 11, color: "#fbbf24", fontFamily: "var(--mono)" }}>-1 to -3 Partial</span>
+                  <span style={{ fontSize: 11, color: "#f87171", fontFamily: "var(--mono)" }}>&gt;-3 Critical gap</span>
+                  <span style={{ fontSize: 11, color: t.textDim, marginLeft: "auto", fontFamily: "var(--mono)" }}>
+                    Scores saved in session. Question coverage auto-populates after generation.
+                  </span>
+                </div>
+                </div>{/* end main column */}
+
+                {/* ── CEO / CMO Plain-English Guide ── */}
+                <div style={{
+                  width: 212, flexShrink: 0, background: t.bgCard,
+                  border: `1px solid ${t.brand}30`, borderRadius: 10,
+                  padding: "16px 14px", position: "sticky", top: 16,
+                }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: t.brand, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 14, fontFamily: "var(--mono)" }}>
+                    How to read this
+                  </div>
+
+                  {[
+                    { icon: "👤", title: "Persona tabs", body: "Pick the buyer role — GC, CFO, CPO… Each person cares about different things." },
+                    { icon: "🔴", title: "Priority dots", body: "How much this topic matters to that buyer. Red = must-win. Yellow = important." },
+                    { icon: "#", title: "Questions", body: "How many of your 182 questions cover this topic. Zero means no content → Sirion is invisible here." },
+                    { icon: "✏️", title: "Sirion Score", body: "You rate Sirion 1–10 on this topic. Be honest — low scores reveal real gaps." },
+                    { icon: "⚡", title: "Gap", body: "Priority minus your score. A -7 gap means buyers care deeply but Sirion doesn't show up. Fix these first." },
+                  ].map(({ icon, title, body }) => (
+                    <div key={title} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${t.border}` }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 3 }}>
+                        {icon} {title}
+                      </div>
+                      <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.6 }}>{body}</div>
+                    </div>
+                  ))}
+
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: t.brand + "10", border: `1px solid ${t.brand}25`, marginTop: 2 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: t.brand, marginBottom: 5 }}>Bottom line</div>
+                    <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.6 }}>
+                      The <strong style={{ color: t.text }}>Weighted Score %</strong> at top right tells you at a glance how well Sirion is positioned for this buyer.
+                      <br /><br />
+                      <span style={{ color: "#f87171", fontWeight: 700 }}>Under 40%</span> = urgent. Content gaps are costing you deals.
+                    </div>
+                  </div>
+                </div>
+
               </div>
             );
           })()}
@@ -5685,26 +4611,14 @@ Find 8-10 decision makers at companies similar to ${persona.company}. Cover diff
                 onChange={handleFileImport}
                 style={{ display: "none" }}
               />
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button onClick={() => fileInputRef.current?.click()} disabled={importLoading}
-                  style={{
-                    background: t.btnBg, color: t.btnText, border: "none", borderRadius: 8,
-                    padding: "12px 28px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                    fontFamily: "var(--mono)", opacity: importLoading ? 0.4 : 1,
-                  }}>
-                  {importLoading ? "Importing\u2026" : "\uD83D\uDCC1 Choose File"}
-                </button>
-                <button onClick={() => {
-                  const csv = "name,title,company,location,linkedin_url,company_url\nJohn Doe,Chief Procurement Officer,Acme Corp,New York,https://linkedin.com/in/johndoe,https://acme.com\nJane Smith,General Counsel,TechCo Inc,San Francisco,https://linkedin.com/in/janesmith,https://techco.io\nMichael Chen,VP Legal Operations,GlobalBank,London,https://linkedin.com/in/michaelchen,https://globalbank.com";
-                  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-                  Object.assign(document.createElement("a"), { href: url, download: "persona-import-template.csv" }).click();
-                  URL.revokeObjectURL(url);
-                }} style={{
-                  border: `1px solid ${t.border}`, background: "transparent", borderRadius: 8,
-                  padding: "12px 20px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  fontFamily: "var(--mono)", color: t.textSec,
-                }}>Download Template</button>
-              </div>
+              <button onClick={() => fileInputRef.current?.click()} disabled={importLoading}
+                style={{
+                  background: t.btnBg, color: t.btnText, border: "none", borderRadius: 8,
+                  padding: "12px 28px", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  fontFamily: "var(--mono)", opacity: importLoading ? 0.4 : 1,
+                }}>
+                {importLoading ? "Importing\u2026" : "\uD83D\uDCC1 Choose File"}
+              </button>
               <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: t.mode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)", border: `1px dashed ${t.border}` }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: t.textDim, fontFamily: "var(--mono)", marginBottom: 6 }}>EXAMPLE FORMATS (any of these work):</div>
                 <code style={{ fontSize: 11, color: t.textSec, fontFamily: "var(--mono)", lineHeight: 1.8 }}>
