@@ -1,0 +1,41 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+
+# Runtime / large data directories — ignored
+data/m1_questions_v2/
+data/m1_personas/
+data/m1_company_intel/
+data/m1_macros/
+data/m2_scan_results/
+data/m2_scans/
+data/m2_scan_meta/
+data/m2_config/
+data/m3_authority_ring/
+data/analyses/
+
+# Canonical source-of-truth files — tracked in git
+# (QUESTIONS_MASTER.json, pipelines/, pipeline_snapshot/, BACKUP_LOCKED_*.json)
+
+.env
+.env.*
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
