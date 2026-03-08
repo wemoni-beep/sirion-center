@@ -137,7 +137,7 @@ export const SCAN_MODES = {
   premium: { label: "Premium", desc: "Web search enabled, flagship models, matches human experience", webSearch: true },
 };
 
-const LLM_MAX_TOKENS = { economy: 1200, premium: 4096 };
+const LLM_MAX_TOKENS = { economy: 2400, premium: 4096 };
 
 const LLM_MODELS = {
   economy: {
@@ -194,7 +194,7 @@ async function askClaude(question, onRetry, timeoutMs = 90000, mode = "economy")
         }
       });
     }
-    return { ok: true, text, citations };
+    return { ok: true, text, citations, finish_reason: data.stop_reason || "unknown" };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -238,7 +238,8 @@ async function askGemini(question, onRetry, timeoutMs = 45000, mode = "economy")
         if (chunk?.web?.uri) citations.push(chunk.web.uri);
       });
     }
-    return { ok: true, text, citations };
+    const gemFr = data.candidates?.[0]?.finishReason || "unknown";
+    return { ok: true, text, citations, finish_reason: gemFr === "STOP" ? "end_turn" : gemFr === "MAX_TOKENS" ? "max_tokens" : gemFr.toLowerCase() };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -285,7 +286,8 @@ async function askOpenAI(question, onRetry, timeoutMs = 60000, mode = "economy")
         }
       });
     }
-    return { ok: true, text, citations };
+    const oaiFr = data.choices?.[0]?.finish_reason || "unknown";
+    return { ok: true, text, citations, finish_reason: oaiFr === "stop" ? "end_turn" : oaiFr === "length" ? "max_tokens" : oaiFr };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -314,7 +316,8 @@ async function askPerplexity(question, onRetry, timeoutMs = 45000, mode = "econo
     if (data.error) return { ok: false, error: data.error.message || JSON.stringify(data.error) };
     const text = data.choices?.[0]?.message?.content || "";
     const citations = data.citations || [];
-    return { ok: true, text, citations };
+    const pplxFr = data.choices?.[0]?.finish_reason || "unknown";
+    return { ok: true, text, citations, finish_reason: pplxFr === "stop" ? "end_turn" : pplxFr === "length" ? "max_tokens" : pplxFr };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -415,7 +418,8 @@ RESPOND IN STRICT JSON with this schema:
   "positioning": number (1-10, how well positioned vs competitors),
   "response_snippet": "first 250 chars of the response for reference",
   "citation_presence": boolean,
-  "sirion_content_cited": boolean
+  "sirion_content_cited": boolean,
+  "confidence": number (1-10, how confident you are in this analysis)
 }
 
 Rules:
@@ -427,7 +431,8 @@ Rules:
 - "sirion_content_cited" = true if sirion.com, sirionlabs.com, or any Sirion-authored content (blog, whitepaper, case study) is referenced as a source
 - Be strict on accuracy — wrong info about the company = low score
 - "content_gaps" = what content could the company publish to improve this response
-- If company not mentioned at all, set mentioned=false, rank=null, sentiment="absent"`;
+- If company not mentioned at all, set mentioned=false, rank=null, sentiment="absent"
+- "confidence" = self-assessment of analysis reliability. Set low (1-4) if the response appears truncated mid-sentence, if key sections are missing, or if there isn't enough content to judge accurately. Set high (7-10) only when the response is clearly complete and provides sufficient detail for reliable analysis.`;
 
 /**
  * Smart truncation: ensures target company mentions are ALWAYS included in the
@@ -473,7 +478,7 @@ async function analyzeBatch(question, responses, company, onRetry, timeoutMs = 4
   // Build combined prompt with all successful responses
   // Premium mode: longer snippets since web-search-enriched responses are richer
   // smartTruncate ensures target company mentions are never lost to truncation
-  const maxSnippet = scanMode === "premium" ? 6000 : 4000;
+  const maxSnippet = scanMode === "premium" ? 12000 : 6000;
   const responseSections = Object.entries(responses)
     .map(([llmId, resp]) => `=== ${llmId.toUpperCase()} RESPONSE ===\n"""${smartTruncate(resp, maxSnippet, company)}"""`)
     .join("\n\n");
@@ -497,7 +502,7 @@ Each value must follow the analysis schema. Return JSON only.`;
       headers: getHeaders(),
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: ANALYSIS_SYSTEM + `\n\nIMPORTANT: You are analyzing MULTIPLE responses at once. Return a JSON object where each key is an LLM name (${llmKeys.join(", ")}) and each value is the full analysis object following the schema above. Example structure: {"claude": {...}, "gemini": {...}, "openai": {...}}`,
         messages: [{ role: "user", content: userMsg }],
       }),
@@ -592,6 +597,9 @@ const ERROR_ANALYSIS = {
   recommendation: "Fix API connection", accuracy: 0, completeness: 0, positioning: 0,
   response_snippet: "", full_response: "",
   citation_presence: false, sirion_content_cited: false,
+  confidence: 0, answer_length: 0, truncated: false,
+  first_mention_pos: -1, total_mentions: 0,
+  parse_coverage: 0, _low_confidence: true,
 };
 
 /**
@@ -743,6 +751,29 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
           const resp = responseTexts[llmId];
           analysis.response_snippet = resp?.text?.substring(0, 300) || "";
           analysis.full_response = resp?.text || "";
+
+          // ── Retrieval metadata ──
+          const fullText = resp?.text || "";
+          const companyLower = company.toLowerCase();
+          const textLower = fullText.toLowerCase();
+          analysis.answer_length = fullText.length;
+          analysis.truncated = resp?.finish_reason === "max_tokens";
+          analysis.first_mention_pos = textLower.indexOf(companyLower);
+          let _mc = 0, _sp = 0;
+          while (_sp < textLower.length) {
+            const _idx = textLower.indexOf(companyLower, _sp);
+            if (_idx === -1) break;
+            _mc++;
+            _sp = _idx + companyLower.length;
+          }
+          analysis.total_mentions = _mc;
+          const _maxSnip = scanMode === "premium" ? 12000 : 6000;
+          analysis.parse_coverage = fullText.length > 0 ? +(Math.min(_maxSnip, fullText.length) / fullText.length).toFixed(2) : 1;
+          analysis._low_confidence =
+            analysis.truncated ||
+            analysis.parse_coverage < 0.5 ||
+            (analysis.confidence != null && analysis.confidence <= 3);
+
           if (resp?.citations?.length > 0) {
             const existing = new Set((analysis.cited_sources || []).map(s => s.domain));
             resp.citations.forEach(url => {
@@ -879,7 +910,9 @@ export async function runScan(queries, company, llmIds, onProgress, abortSignal,
    SCORE AGGREGATION
    ─────────────────────────────────────────────── */
 
-// Default calibration values — overridable via localStorage xt_m2_calibration
+// Default calibration values
+// Canonical source: pipeline.m2.calibration (Firebase via persistenceManager)
+// Fallback: localStorage xt_m2_calibration (legacy, migrated on boot)
 export const DEFAULT_CALIBRATION = {
   wMention: 0.35,     // Weight: mention rate in overall score
   wPosition: 0.40,    // Weight: position score in overall score
@@ -896,6 +929,15 @@ export const DEFAULT_CALIBRATION = {
 };
 
 export function loadCalibration() {
+  // 1. Try pipeline snapshot (canonical source)
+  try {
+    const snap = localStorage.getItem("xt_pipeline_snapshot");
+    if (snap) {
+      const parsed = JSON.parse(snap);
+      if (parsed.m2?.calibration) return { ...DEFAULT_CALIBRATION, ...parsed.m2.calibration };
+    }
+  } catch {}
+  // 2. Legacy fallback: direct localStorage key
   try {
     const raw = localStorage.getItem("xt_m2_calibration");
     if (raw) return { ...DEFAULT_CALIBRATION, ...JSON.parse(raw) };
@@ -903,6 +945,9 @@ export function loadCalibration() {
   return { ...DEFAULT_CALIBRATION };
 }
 
+// saveCalibration writes to legacy localStorage for immediate sync reads.
+// Callers in React components should ALSO call updateModule("m2", { calibration: cal })
+// to persist through the pipeline → Firebase path.
 export function saveCalibration(cal) {
   try { localStorage.setItem("xt_m2_calibration", JSON.stringify(cal)); } catch {}
 }

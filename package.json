@@ -12,7 +12,10 @@
     "test:watch": "vitest",
     "test:e2e": "npx playwright test",
     "test:all": "node scripts/seed_local.cjs && vitest run && npx playwright test",
-    "seed": "node scripts/seed_local.cjs"
+    "seed": "node scripts/seed_local.cjs",
+    "deploy": "node scripts/deploy.cjs",
+    "deploy:dry": "node scripts/deploy.cjs --dry-run",
+    "deploy:skip-live": "node scripts/deploy.cjs --skip-live"
   },
   "dependencies": {
     "lucide-react": "^0.575.0",
