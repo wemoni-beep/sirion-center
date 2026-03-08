@@ -1,0 +1,20 @@
+{
+  "name": "xtrusio-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Xtrusio backend — background scan execution, job queue, key vault",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}

@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/__tests__/**/*.test.js'],
+    include: ['src/__tests__/**/*.test.js', 'shared/__tests__/**/*.test.js'],
     // Mock environment variables so tests don't need real API keys
     env: {
       VITE_ANTHROPIC_API_KEY: 'test-key',
