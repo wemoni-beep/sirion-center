@@ -18,13 +18,41 @@ export function createPersistenceManager(getState, getDocId, setDocId) {
   let _error = null;
   let _destroyed = false;
 
-  // ── Build a clean snapshot (no internal _ fields) ──
+  let _lastHash = null;
+
+  // ── Build a slim snapshot — localStorage is light cache, not source of truth ──
   function _buildSnapshot(state) {
     const snap = {};
     for (const key of Object.keys(state)) {
       if (key.startsWith("_")) continue;
       snap[key] = state[key];
     }
+
+    // ── Strip heavy data that lives in its own Firebase collection ──
+    // M1: questions live in m1_questions_v2, personas in m1_personas
+    if (snap.m1) {
+      snap.m1 = { ...snap.m1 };
+      delete snap.m1.questions;        // 1000+ items → m1_questions_v2
+      delete snap.m1.personaProfiles;  // full text → m1_personas
+    }
+    // Intel: keep scores/narrative (display-ready), drop full scan results array
+    if (snap.intel) {
+      snap.intel = { ...snap.intel };
+      if (snap.intel.scanResults) {
+        // Keep metadata (llms, date, scores) but drop individual results
+        const { results, ...scanMeta } = snap.intel.scanResults;
+        snap.intel.scanResults = scanMeta;
+      }
+    }
+    // M2: keep scores, drop full scan results
+    if (snap.m2) {
+      snap.m2 = { ...snap.m2 };
+      if (snap.m2.scanResults) {
+        const { results, ...scanMeta } = snap.m2.scanResults;
+        snap.m2.scanResults = scanMeta;
+      }
+    }
+
     snap.updated_at = new Date().toISOString();
     return snap;
   }
@@ -33,7 +61,7 @@ export function createPersistenceManager(getState, getDocId, setDocId) {
   function _writeLocalStorage(snap) {
     try {
       localStorage.setItem("xt_pipeline_snapshot", JSON.stringify(snap));
-    } catch {}
+    } catch (e) { console.warn("[PersistenceManager] localStorage write failed:", e.message); }
   }
 
   // ── Firebase write (async, durable) ──
@@ -52,6 +80,14 @@ export function createPersistenceManager(getState, getDocId, setDocId) {
     }
   }
 
+  // ── Simple hash to detect meaningful changes ──
+  function _quickHash(obj) {
+    const s = JSON.stringify(obj, (k, v) => k === "updated_at" ? undefined : v);
+    let h = 0;
+    for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+    return h;
+  }
+
   // ── Flush: write current state to all persistence layers ──
   async function flush() {
     if (_destroyed) return;
@@ -65,12 +101,16 @@ export function createPersistenceManager(getState, getDocId, setDocId) {
     // 1. localStorage — always, synchronous
     _writeLocalStorage(snap);
 
-    // 2. Firebase — async with retry
+    // 2. Firebase — skip if nothing changed (reduce write amplification)
+    const hash = _quickHash(snap);
+    if (hash === _lastHash) return;
+
     _saving = true;
     _error = null;
     try {
       await _writeFirebase(snap);
       _lastSavedAt = new Date().toISOString();
+      _lastHash = hash;
       _retryCount = 0;
     } catch (e) {
       console.warn("[PersistenceManager] Firebase save failed:", e.message);

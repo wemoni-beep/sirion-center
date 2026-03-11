@@ -3,6 +3,7 @@ import { useTheme } from "./ThemeContext";
 import { usePipeline } from "./PipelineContext";
 import { callClaude } from "./claudeApi.js";
 import { runScan, computeScores, computeNarrativeBreakdown, loadCalibration } from "./scanEngine.js";
+import { db } from "./firebase.js";
 import { FONT } from "./typography";
 
 /* ═══════════════════════════════════════════════════════
@@ -213,6 +214,23 @@ export default function CompanyIntelligence({ onNavigate }) {
   const [questionFilter, setQuestionFilter] = useState({ persona: "all", demandType: "all", stage: "all" });
   const [pushResult, setPushResult] = useState(null);
   const abortRef = useRef(false);
+  const scanDetailRef = useRef(null); // Full scan results kept in memory only
+  const [scanDetailLoaded, setScanDetailLoaded] = useState(false);
+
+  // Lazy-load scan detail from intel_scans collection on first render
+  useEffect(() => {
+    if (scanDetailRef.current || scanDetailLoaded) return;
+    if (!intel.scannedAt) return; // No scan ever ran
+    const docId = pipeline?._docId || "default";
+    db.getAll("intel_scans").then(docs => {
+      const match = docs.find(d => d._id === docId);
+      if (match?.results) {
+        scanDetailRef.current = match.results;
+        setScanDetailLoaded(true);
+        console.info("[Intel] Lazy-loaded scan detail from intel_scans (" + match.results.length + " results)");
+      }
+    }).catch(() => {});
+  }, [intel.scannedAt, pipeline?._docId, scanDetailLoaded]);
 
   // Stage coverage heatmap data (for Demand Map tab)
   const heatmapData = useMemo(() => {
@@ -401,12 +419,11 @@ export default function CompanyIntelligence({ onNavigate }) {
 
       if (scanResult) {
         const cal = loadCalibration();
-        // Trim scan results for persistence — keep only display-critical fields
-        // Full analysis text is too large for Firebase (exceeds serialization limits)
+        // Trim scan results — keep only display-critical fields
         const trimForPersistence = (sr) => ({
           ...sr,
           results: (sr.results || []).map(r => {
-            const t = { query: r.query, cluster: r.cluster, persona: r.persona };
+            const t = { cluster: r.cluster, persona: r.persona };
             if (r.analyses) {
               t.analyses = {};
               for (const [llm, a] of Object.entries(r.analyses)) {
@@ -414,7 +431,7 @@ export default function CompanyIntelligence({ onNavigate }) {
                   mentioned: a.mentioned,
                   rank: a.rank,
                   sentiment: a.sentiment,
-                  vendors_mentioned: a.vendors_mentioned,
+                  vendors_mentioned: (a.vendors_mentioned || []).slice(0, 10),
                 };
               }
             }
@@ -422,18 +439,30 @@ export default function CompanyIntelligence({ onNavigate }) {
           }),
         });
         const trimmedScan = trimForPersistence(scanResult);
-        finalUpdate.scanResults = trimmedScan;
-        finalUpdate.scanScores = scanResult.scores || computeScores(scanResult.results, scanResult.llms, cal);
-        finalUpdate.narrativeBreakdown = computeNarrativeBreakdown(scanResult.results, scanResult.llms, cal);
+        const scores = scanResult.scores || computeScores(scanResult.results, scanResult.llms, cal);
+        const narrative = computeNarrativeBreakdown(scanResult.results, scanResult.llms, cal);
+
+        // Save full scan detail to separate collection (not inside pipeline doc)
+        const scanDocId = pipeline?._docId || "default";
+        try {
+          await db.saveWithId("intel_scans", scanDocId, {
+            ...trimmedScan,
+            updated_at: now,
+          });
+          console.info("[Intel] Scan detail saved to intel_scans/" + scanDocId);
+        } catch (e) {
+          console.warn("[Intel] intel_scans save failed (non-fatal):", e.message);
+        }
+
+        // Store only summary in pipeline — scanResults without .results array
+        const { results: _drop, ...scanMeta } = trimmedScan;
+        finalUpdate.scanResults = scanMeta; // llms, date, scores metadata only
+        finalUpdate.scanScores = scores;
+        finalUpdate.narrativeBreakdown = narrative;
         finalUpdate.scannedAt = scanResult.date || now;
 
-        // Also push to M2 so Perception Monitor can see the data
-        updateModule("m2", {
-          scanResults: trimmedScan,
-          scores: scanResult.scores,
-          scannedAt: scanResult.date || now,
-          generationId: genId,
-        });
+        // Keep full results in memory for current session rendering
+        scanDetailRef.current = trimmedScan.results;
       }
 
       updateModule("intel", finalUpdate);
@@ -676,9 +705,10 @@ export default function CompanyIntelligence({ onNavigate }) {
   /* ── Computed scan data for Overview sections ── */
   const LLM_COLORS = { openai: "#10b981", gemini: "#3b82f6", claude: "#f59e0b" };
   const LLM_LABELS = { openai: "ChatGPT", gemini: "Gemini", claude: "Claude" };
-  const _scanData = intel.scanResults || pipeline?.m2?.scanResults || null;
-  const scanLlms = _scanData?.llms || [];
-  const scanResults = _scanData?.results || [];
+  const _scanMeta = intel.scanResults || pipeline?.m2?.scanResults || null;
+  const scanLlms = _scanMeta?.llms || [];
+  // Scan results: prefer in-memory detail, fall back to pipeline (if still there from old data)
+  const scanResults = scanDetailRef.current || _scanMeta?.results || [];
   const totalScanQs = scanResults.length;
 
   const citationRates = useMemo(() => {
