@@ -29,7 +29,7 @@ export function toFsVal(val, depth = 0) {
   if (typeof val === "number") return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
   if (typeof val === "string") return { stringValue: val.length > 8000 ? val.substring(0, 8000) : val };
   // For deep objects/arrays: serialize to JSON string to avoid Firestore depth limits
-  if (depth >= 2) return { stringValue: JSON.stringify(val).substring(0, 50000) };
+  if (depth >= 3) return { stringValue: JSON.stringify(val).substring(0, 200000) };
   if (Array.isArray(val)) {
     // Firestore allows up to 20000 array elements; serialize large arrays to JSON string
     if (val.length > 500) return { stringValue: JSON.stringify(val) };
@@ -234,7 +234,7 @@ export const db = {
       }
       const data = await res.json();
       const docs = (data.documents || []).map(fromFsDoc).filter(Boolean);
-      docs.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+      docs.sort((a, b) => (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || ""));
       // Cache Firebase docs locally but do NOT overwrite existing file backup
       docs.forEach(d => { if (d._id) localCache.set(collection, d._id, d); });
       return docs;
@@ -355,7 +355,7 @@ export const db = {
 
 const API_KEY_COLLECTION = "app_config";
 const API_KEY_DOC = "api_keys";
-const API_KEY_FIELDS = ["xt_anthropic_key", "xt_gemini_key", "xt_openai_key", "xt_perplexity_key"];
+const API_KEY_FIELDS = ["xt_anthropic_key", "xt_gemini_key", "xt_openai_key", "xt_perplexity_key", "xt_grok_key"];
 
 /**
  * Load API keys from Firebase into localStorage.

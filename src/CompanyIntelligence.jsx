@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTheme } from "./ThemeContext";
 import { usePipeline } from "./PipelineContext";
 import { callClaude } from "./claudeApi.js";
+import { runScan, computeScores, computeNarrativeBreakdown, loadCalibration } from "./scanEngine.js";
 import { FONT } from "./typography";
 
 /* ═══════════════════════════════════════════════════════
@@ -231,12 +232,25 @@ export default function CompanyIntelligence({ onNavigate }) {
     return map;
   }, [intel.questions, intel.buyerPersonas]);
 
-  // Sync from pipeline on load
+  // Sync from pipeline on load + recover interrupted research
   useEffect(() => {
     if (intel.companyName && !companyName) setCompanyName(intel.companyName);
     if (intel.companyUrl && !companyUrl) setCompanyUrl(intel.companyUrl);
     if (intel.industry && !industry) setIndustry(intel.industry);
-    if (intel.researchPhase === "complete") setResearchPhase("complete");
+    if (intel.researchPhase === "complete") {
+      setResearchPhase("complete");
+    } else if (
+      (intel.researchPhase === "researching" || intel.researchPhase === "generating" || intel.researchPhase === "scanning") &&
+      !abortRef.current
+    ) {
+      // Interrupted research on previous session — recover based on data availability
+      if (intel.questions?.length > 0 || intel.overview) {
+        setResearchPhase("complete");
+        updateModule("intel", { researchPhase: "complete" });
+      } else {
+        setResearchPhase("idle");
+      }
+    }
   }, [intel.companyName]);
 
   const hasResults = researchPhase === "complete" && intel.companyName;
@@ -247,7 +261,7 @@ export default function CompanyIntelligence({ onNavigate }) {
     abortRef.current = false;
     setError(null);
     setResearchPhase("researching");
-    setProgress({ step: 1, total: 3, message: "Researching company..." });
+    setProgress({ step: 1, total: 4, message: "Researching company..." });
 
     try {
       // ── Call 1: Company Research ──
@@ -271,7 +285,7 @@ export default function CompanyIntelligence({ onNavigate }) {
       });
 
       // ── Call 2: Decision Makers & Personas ──
-      setProgress({ step: 2, total: 3, message: "Identifying decision makers..." });
+      setProgress({ step: 2, total: 4, message: "Identifying decision makers..." });
       await new Promise(r => setTimeout(r, 2000)); // rate limit delay
 
       const context2 = `Company: ${companyName}\nIndustry: ${industry || r1.targetMarket?.industries?.[0] || "B2B Software"}\n\nOverview: ${r1.overview}\n\nProducts: ${JSON.stringify(r1.productsServices?.slice(0, 5))}\n\nCompetitors: ${r1.competitors?.map(c => c.name).join(", ")}`;
@@ -297,7 +311,7 @@ export default function CompanyIntelligence({ onNavigate }) {
         const alloc = demandMap.perPersona[i];
         setProgress({
           step: 3,
-          total: 3,
+          total: 4,
           message: `Generating questions for ${p.label} (${i + 1}/${personas.length})...`,
         });
 
@@ -326,18 +340,103 @@ export default function CompanyIntelligence({ onNavigate }) {
         }
       }
 
-      // ── Save final results ──
+      // ── Save demand map results ──
       const genId = crypto.randomUUID ? crypto.randomUUID() : `gen-${Date.now()}`;
       const now = new Date().toISOString();
 
       updateModule("intel", {
         demandMap,
         questions: allQuestions,
-        researchedAt: now,
         generationId: genId,
+      });
+
+      // ── Call 4: AI Perception Scan ──
+      if (abortRef.current) return;
+      setResearchPhase("scanning");
+      setProgress({ step: 4, total: 4, message: "Scanning AI platforms..." });
+
+      const scanQueries = allQuestions.map(q => ({
+        id: q.id,
+        query: q.question,
+        persona: q.persona,
+        stage: q.stage,
+        cw: q.cluster || "",
+        lifecycle: q.lifecycle || "full-stack",
+      }));
+
+      let scanResult = null;
+      const scanAbort = new AbortController();
+      // Wire our abort ref to the AbortController
+      const checkAbort = setInterval(() => { if (abortRef.current) scanAbort.abort(); }, 500);
+      try {
+        scanResult = await runScan(
+          scanQueries,
+          companyName.trim(),
+          ["claude", "gemini", "openai"],
+          (p) => {
+            const done = p.current || p.done || 0;
+            const tot = p.total || scanQueries.length;
+            setProgress({
+              step: 4, total: 4,
+              message: `Scanning question ${done}/${tot} across AI platforms...`,
+            });
+          },
+          scanAbort.signal,
+          null,  // onResultReady
+          "economy"
+        );
+      } catch (scanErr) {
+        console.warn("[Intel] Scan failed (non-fatal):", scanErr.message);
+        // Scan failure is non-fatal -- we still have research + questions
+      } finally {
+        clearInterval(checkAbort);
+      }
+
+      // Save everything including scan results
+      const finalUpdate = {
+        researchedAt: now,
         researchPhase: "complete",
         error: null,
-      });
+      };
+
+      if (scanResult) {
+        const cal = loadCalibration();
+        // Trim scan results for persistence — keep only display-critical fields
+        // Full analysis text is too large for Firebase (exceeds serialization limits)
+        const trimForPersistence = (sr) => ({
+          ...sr,
+          results: (sr.results || []).map(r => {
+            const t = { query: r.query, cluster: r.cluster, persona: r.persona };
+            if (r.analyses) {
+              t.analyses = {};
+              for (const [llm, a] of Object.entries(r.analyses)) {
+                t.analyses[llm] = {
+                  mentioned: a.mentioned,
+                  rank: a.rank,
+                  sentiment: a.sentiment,
+                  vendors_mentioned: a.vendors_mentioned,
+                };
+              }
+            }
+            return t;
+          }),
+        });
+        const trimmedScan = trimForPersistence(scanResult);
+        finalUpdate.scanResults = trimmedScan;
+        finalUpdate.scanScores = scanResult.scores || computeScores(scanResult.results, scanResult.llms, cal);
+        finalUpdate.narrativeBreakdown = computeNarrativeBreakdown(scanResult.results, scanResult.llms, cal);
+        finalUpdate.scannedAt = scanResult.date || now;
+
+        // Also push to M2 so Perception Monitor can see the data
+        updateModule("m2", {
+          scanResults: trimmedScan,
+          scores: scanResult.scores,
+          scannedAt: scanResult.date || now,
+          generationId: genId,
+        });
+      }
+
+      updateModule("intel", finalUpdate);
 
       // Update global meta
       updateMeta({
@@ -347,7 +446,7 @@ export default function CompanyIntelligence({ onNavigate }) {
       });
 
       setResearchPhase("complete");
-      setProgress({ step: 3, total: 3, message: "Complete" });
+      setProgress({ step: 4, total: 4, message: "Complete" });
       setActiveTab("overview");
 
     } catch (err) {
@@ -472,7 +571,7 @@ export default function CompanyIntelligence({ onNavigate }) {
           </div>
         )}
 
-        <button onClick={runResearch} disabled={!companyName.trim() || researchPhase === "researching" || researchPhase === "generating"}
+        <button onClick={runResearch} disabled={!companyName.trim() || researchPhase === "researching" || researchPhase === "generating" || researchPhase === "scanning"}
           style={{ ...btnPrimary(!companyName.trim()), width: "100%", marginTop: 20 }}>
           Research Company
         </button>
@@ -488,6 +587,7 @@ export default function CompanyIntelligence({ onNavigate }) {
       { n: 1, label: "Company Research", desc: "Analyzing website and market position" },
       { n: 2, label: "Decision Makers", desc: "Identifying key personas and decision weights" },
       { n: 3, label: "Demand Map", desc: "Generating buyer-intent queries per persona" },
+      { n: 4, label: "AI Perception Scan", desc: "Scanning queries across ChatGPT, Gemini, Claude" },
     ];
     const current = progress.step || 1;
 
@@ -526,7 +626,7 @@ export default function CompanyIntelligence({ onNavigate }) {
                   {isActive && (
                     <div style={{ marginTop: 8, height: 3, background: T.border, borderRadius: 2, overflow: "hidden" }}>
                       <div style={{
-                        width: researchPhase === "generating" ? "60%" : "50%",
+                        width: researchPhase === "generating" ? "60%" : researchPhase === "scanning" ? "70%" : "50%",
                         height: "100%", background: T.brand, borderRadius: 2,
                         animation: "pulse 1.5s ease-in-out infinite",
                       }} />
@@ -573,79 +673,317 @@ export default function CompanyIntelligence({ onNavigate }) {
     </div>
   );
 
+  /* ── Computed scan data for Overview sections ── */
+  const LLM_COLORS = { openai: "#10b981", gemini: "#3b82f6", claude: "#f59e0b" };
+  const LLM_LABELS = { openai: "ChatGPT", gemini: "Gemini", claude: "Claude" };
+  const _scanData = intel.scanResults || pipeline?.m2?.scanResults || null;
+  const scanLlms = _scanData?.llms || [];
+  const scanResults = _scanData?.results || [];
+  const totalScanQs = scanResults.length;
+
+  const citationRates = useMemo(() => {
+    if (!totalScanQs) return {};
+    return Object.fromEntries(scanLlms.map(lid => {
+      const hits = scanResults.filter(r => r.analyses?.[lid]?.mentioned && !r.analyses[lid]._error).length;
+      return [lid, { hits, total: totalScanQs, rate: Math.round(hits / totalScanQs * 100) }];
+    }));
+  }, [scanResults, scanLlms, totalScanQs]);
+
+  const competitorMatrix = useMemo(() => {
+    if (!totalScanQs) return [];
+    const map = {};
+    scanResults.forEach(r => {
+      scanLlms.forEach(lid => {
+        (r.analyses?.[lid]?.vendors_mentioned || []).forEach(v => {
+          if (!map[v.name]) { map[v.name] = { name: v.name }; scanLlms.forEach(l => map[v.name][l] = 0); }
+          map[v.name][lid]++;
+        });
+      });
+    });
+    return Object.values(map).sort((a, b) => {
+      const sa = scanLlms.reduce((s, l) => s + (a[l] || 0), 0);
+      const sb = scanLlms.reduce((s, l) => s + (b[l] || 0), 0);
+      return sb - sa;
+    });
+  }, [scanResults, scanLlms, totalScanQs]);
+
+  const companyAvgCitation = useMemo(() => {
+    if (!scanLlms.length || !totalScanQs) return 0;
+    const totalHits = scanLlms.reduce((s, lid) => s + (citationRates[lid]?.hits || 0), 0);
+    return Math.round(totalHits / (totalScanQs * scanLlms.length) * 1000) / 10;
+  }, [citationRates, scanLlms, totalScanQs]);
+
+  // Strongest/weakest platform insights
+  const platformInsights = useMemo(() => {
+    if (!scanLlms.length) return { strongest: null, weakest: null };
+    const sorted = [...scanLlms].sort((a, b) => (citationRates[b]?.rate || 0) - (citationRates[a]?.rate || 0));
+    return { strongest: sorted[0], weakest: sorted[sorted.length - 1] };
+  }, [citationRates, scanLlms]);
+
+  const stripCite = (s) => typeof s === "string" ? s.replace(/<\/?cite[^>]*>/gi, "") : s;
+
+  const sectionHeader = (num, title, subtitle) => (
+    <div style={{ marginBottom: 20, marginTop: num > 1 ? 40 : 0 }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: T.textGhost, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 6 }}>SECTION {num}</div>
+      <h3 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: T.text, lineHeight: 1.2 }}>{title}</h3>
+      {subtitle && <p style={{ margin: "4px 0 0", fontSize: 12, color: T.textDim, fontStyle: "italic", fontFamily: FONT.body }}>{subtitle}</p>}
+    </div>
+  );
+
+  const insightCard = (borderColor, title, body) => (
+    <div style={{ flex: 1, padding: "14px 16px", borderRadius: 10, borderTop: `1px solid ${borderColor}30`, borderRight: `1px solid ${borderColor}30`, borderBottom: `1px solid ${borderColor}30`, borderLeft: `3px solid ${borderColor}`, background: T.card }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>{body}</div>
+    </div>
+  );
+
   /* ── Tab: Overview ── */
-  const renderOverview = () => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Summary */}
-      <div style={card()}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 8 }}>COMPANY OVERVIEW</div>
-        <div style={{ fontSize: 13, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{intel.overview || "No overview available"}</div>
+  const renderOverview = () => {
+    const cName = intel.companyName || "Company";
+    const hasScan = totalScanQs > 0 && scanLlms.length > 0;
+
+    return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+
+      {/* ═══ SECTION 1: Company Summary ═══ */}
+      {sectionHeader(1, "Company Summary", intel.industry || null)}
+
+      {/* 1-line summary bar */}
+      <div style={{ padding: "14px 18px", borderRadius: 10, background: T.brandBg, border: `1px solid ${T.brand}20`, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, color: T.text, lineHeight: 1.5 }}>
+          {intel.overview ? stripCite(intel.overview).split(/\.\s/)[0] + "." : "No overview available."}
+        </div>
       </div>
 
-      {/* Products Grid */}
-      {intel.productsServices?.length > 0 && (
-        <div style={card()}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 12 }}>PRODUCTS & SERVICES</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
-            {intel.productsServices.map((p, i) => (
-              <div key={i} style={{ padding: "12px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.brandBg }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: T.textDim, marginTop: 4, lineHeight: 1.4 }}>{p.description}</div>
-                {p.category && <span style={{ fontSize: 9, color: T.brand, fontFamily: FONT.mono, marginTop: 6, display: "inline-block" }}>{p.category.toUpperCase()}</span>}
+      {/* Key Findings + Recent News side-by-side */}
+      <div style={{ display: "grid", gridTemplateColumns: intel.recentNews?.length > 0 ? "1fr 1fr" : "1fr", gap: 14, marginBottom: 0 }}>
+        {/* Key Findings column */}
+        {intel.keyFindings?.length > 0 && (
+          <div style={card()}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 12 }}>KEY FINDINGS</div>
+            {intel.keyFindings.map((f, i) => {
+              const colors = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"];
+              return (
+                <div key={i} style={{ padding: "10px 12px", borderRadius: 8, borderTop: `1px solid ${T.border}`, borderRight: `1px solid ${T.border}`, borderBottom: `1px solid ${T.border}`, borderLeft: `3px solid ${colors[i % colors.length]}`, marginBottom: 8, background: T.card }}>
+                  <div style={{ fontSize: 12, color: T.text, lineHeight: 1.5 }}>{stripCite(f)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Recent News column */}
+        {intel.recentNews?.length > 0 && (
+          <div style={card()}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 12 }}>RECENT NEWS</div>
+            {intel.recentNews.map((n, i) => (
+              <div key={i} style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.text, flex: 1 }}>{stripCite(n.headline)}</div>
+                  {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, color: "#ef4444", background: "#ef444415", padding: "2px 6px", borderRadius: 4, marginLeft: 8, fontFamily: FONT.mono }}>NEW</span>}
+                </div>
+                <div style={{ fontSize: 10, color: T.textGhost, fontFamily: FONT.mono }}>{n.date}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ═══ SECTION 2: Platform Scorecard ═══ */}
+      {hasScan && <>
+        {sectionHeader(2, "Platform Scorecard", `${cName} citation rate across AI platforms`)}
+
+        <div style={card({ marginBottom: 14 })}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.text, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>{"\u{1F4CA}"}</span> {cName} Citation Rate by Platform
+          </div>
+          {scanLlms.map(lid => {
+            const rate = citationRates[lid]?.rate || 0;
+            const barColor = rate > 30 ? "#10b981" : rate > 10 ? "#f59e0b" : "#ef4444";
+            return (
+              <div key={lid} style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+                <div style={{ width: 70, fontSize: 12, fontWeight: 500, color: T.text }}>{LLM_LABELS[lid] || lid}</div>
+                <div style={{ flex: 1, height: 24, background: T.border, borderRadius: 6, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(rate, 2)}%`, height: "100%", background: barColor, borderRadius: 6, transition: "width 0.5s ease" }} />
+                </div>
+                <div style={{ width: 40, textAlign: "right", fontSize: 14, fontWeight: 700, color: T.text, fontFamily: FONT.mono }}>{rate}%</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Insight cards */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 0 }}>
+          {platformInsights.strongest && insightCard(
+            "#10b981",
+            `${LLM_LABELS[platformInsights.strongest]}: ${cName}'s Strongest Platform`,
+            `${citationRates[platformInsights.strongest]?.hits || 0} citations in ${totalScanQs} queries (${citationRates[platformInsights.strongest]?.rate || 0}%). ${LLM_LABELS[platformInsights.strongest]} is the most likely to mention ${cName} in buyer queries.`
+          )}
+          {platformInsights.weakest && platformInsights.weakest !== platformInsights.strongest && insightCard(
+            "#ef4444",
+            `${LLM_LABELS[platformInsights.weakest]}: Near-Total Blackout`,
+            `Only ${citationRates[platformInsights.weakest]?.hits || 0} citation${citationRates[platformInsights.weakest]?.hits === 1 ? "" : "s"} in ${totalScanQs} queries (${citationRates[platformInsights.weakest]?.rate || 0}%). ${cName} is largely invisible on ${LLM_LABELS[platformInsights.weakest]}.`
+          )}
+        </div>
+      </>}
+
+      {/* ═══ SECTION 3: AI Visibility Leaderboard ═══ */}
+      {hasScan && competitorMatrix.length > 0 && <>
+        {sectionHeader(3, "AI Visibility Leaderboard", "Who owns the AI conversation \u2014 total citations across all platforms")}
+
+        {/* Platform-by-platform stat boxes */}
+        <div style={card({ marginBottom: 14 })}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: T.accent3 || T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 14 }}>
+            {"\u{25CF}"} PLATFORM-BY-PLATFORM BREAKDOWN
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${scanLlms.length}, 1fr)`, gap: 10, marginBottom: 20 }}>
+            {scanLlms.map(lid => (
+              <div key={lid} style={{ textAlign: "center", padding: "12px 8px", border: `1px solid ${T.border}`, borderRadius: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 600, color: T.textGhost, letterSpacing: 1, fontFamily: FONT.mono, marginBottom: 4 }}>{(LLM_LABELS[lid] || lid).toUpperCase()}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: T.text, fontFamily: FONT.heading }}>{citationRates[lid]?.hits || 0}<span style={{ fontSize: 14, fontWeight: 400, color: T.textDim }}>/{totalScanQs}</span></div>
+                <div style={{ fontSize: 10, color: T.textDim }}>{cName} cited</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Stacked horizontal bars per competitor */}
+          {competitorMatrix.slice(0, 8).map((comp, i) => {
+            const total = scanLlms.reduce((s, l) => s + (comp[l] || 0), 0);
+            const maxTotal = scanLlms.reduce((s, l) => s + (competitorMatrix[0]?.[l] || 0), 0);
+            const isCompany = comp.name.toLowerCase() === cName.toLowerCase();
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 80, fontSize: 11, fontWeight: isCompany ? 700 : 500, color: isCompany ? T.brand : T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {"\u{25CF}"} {comp.name}
+                </div>
+                <div style={{ flex: 1, height: 20, display: "flex", borderRadius: 4, overflow: "hidden", background: T.border }}>
+                  {scanLlms.map(lid => {
+                    const w = maxTotal > 0 ? (comp[lid] || 0) / maxTotal * 100 : 0;
+                    return w > 0 ? <div key={lid} style={{ width: `${w}%`, height: "100%", background: LLM_COLORS[lid], display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {w > 8 && <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", fontFamily: FONT.mono }}>{comp[lid]}</span>}
+                    </div> : null;
+                  })}
+                </div>
+                <div style={{ width: 35, textAlign: "right", fontSize: 12, fontWeight: 600, color: T.textDim, fontFamily: FONT.mono }}>{total > 0 ? `~${total}` : "\u2014"}</div>
+              </div>
+            );
+          })}
+
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 16, justifyContent: "center", marginTop: 12 }}>
+            {scanLlms.map(lid => (
+              <div key={lid} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: LLM_COLORS[lid] }} />
+                <span style={{ fontSize: 10, color: T.textDim }}>{LLM_LABELS[lid]}</span>
               </div>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Market Position + Target Market */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <div style={card()}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 8 }}>MARKET POSITION</div>
-          <div style={{ fontSize: 12, color: T.text, lineHeight: 1.6 }}>{intel.marketPosition || "Not available"}</div>
-        </div>
-        <div style={card()}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 8 }}>TARGET MARKET</div>
-          {intel.targetMarket ? (
-            <div style={{ fontSize: 12, color: T.text, lineHeight: 1.8 }}>
-              {intel.targetMarket.segments?.length > 0 && <div><span style={{ color: T.textDim }}>Segments:</span> {intel.targetMarket.segments.join(", ")}</div>}
-              {intel.targetMarket.geography?.length > 0 && <div><span style={{ color: T.textDim }}>Geography:</span> {intel.targetMarket.geography.join(", ")}</div>}
-              {intel.targetMarket.industries?.length > 0 && <div><span style={{ color: T.textDim }}>Industries:</span> {intel.targetMarket.industries.join(", ")}</div>}
+        {/* Donut chart + leaderboard side-by-side */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 14, marginBottom: 14 }}>
+          {/* Citation Intensity Heatmap */}
+          <div style={card()}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 12 }}>
+              {"\u{25CF}"} CITATION INTENSITY HEATMAP
             </div>
-          ) : <div style={{ color: T.textDim }}>Not available</div>}
-        </div>
-      </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 9, fontWeight: 600, color: T.textGhost, letterSpacing: 1, fontFamily: FONT.mono, borderBottom: `1px solid ${T.border}` }}></th>
+                  {scanLlms.map(lid => (
+                    <th key={lid} style={{ textAlign: "center", padding: "6px 8px", fontSize: 9, fontWeight: 600, color: T.textGhost, letterSpacing: 1, fontFamily: FONT.mono, borderBottom: `1px solid ${T.border}` }}>{(LLM_LABELS[lid] || lid).toUpperCase()}</th>
+                  ))}
+                  <th style={{ textAlign: "center", padding: "6px 8px", fontSize: 9, fontWeight: 700, color: T.textDim, letterSpacing: 1, fontFamily: FONT.mono, borderBottom: `1px solid ${T.border}` }}>TOTAL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {competitorMatrix.slice(0, 8).map((comp, i) => {
+                  const total = scanLlms.reduce((s, l) => s + (comp[l] || 0), 0);
+                  const isCompany = comp.name.toLowerCase() === cName.toLowerCase();
+                  return (
+                    <tr key={i} style={{ background: isCompany ? `${T.brand}10` : "transparent" }}>
+                      <td style={{ padding: "8px", fontWeight: isCompany ? 700 : 500, color: isCompany ? T.brand : T.text, borderBottom: `1px solid ${T.border}` }}>{comp.name}</td>
+                      {scanLlms.map(lid => {
+                        const v = comp[lid] || 0;
+                        const bg = v >= 5 ? "#10b98120" : v >= 3 ? "#3b82f615" : v >= 1 ? "#ef444412" : "transparent";
+                        const fg = v >= 5 ? "#10b981" : v >= 3 ? T.text : v >= 1 ? "#ef4444" : T.textGhost;
+                        return (
+                          <td key={lid} style={{ textAlign: "center", padding: "8px", background: bg, color: fg, fontWeight: v >= 5 ? 700 : 400, fontFamily: FONT.mono, borderBottom: `1px solid ${T.border}` }}>
+                            {v > 0 ? v : "\u2014"}
+                          </td>
+                        );
+                      })}
+                      <td style={{ textAlign: "center", padding: "8px", fontWeight: 700, color: total > 10 ? "#10b981" : total > 5 ? T.text : "#ef4444", fontFamily: FONT.mono, borderBottom: `1px solid ${T.border}` }}>
+                        {total > 0 ? `~${total}` : "\u2014"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-      {/* Key Findings */}
-      {intel.keyFindings?.length > 0 && (
-        <div style={card()}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 10 }}>KEY FINDINGS</div>
-          {intel.keyFindings.map((f, i) => (
-            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-              <span style={{ width: 20, height: 20, borderRadius: "50%", background: T.brandBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: T.brand, fontFamily: FONT.mono, flexShrink: 0 }}>{i + 1}</span>
-              <span style={{ fontSize: 12, color: T.text, lineHeight: 1.5 }}>{f}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Recent News */}
-      {intel.recentNews?.length > 0 && (
-        <div style={card()}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: T.brand, letterSpacing: 1.5, fontFamily: FONT.mono, marginBottom: 10 }}>RECENT NEWS</div>
-          {intel.recentNews.map((n, i) => (
-            <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: i < intel.recentNews.length - 1 ? `1px solid ${T.border}` : "none" }}>
-              <span style={{ fontSize: 10, color: T.textGhost, fontFamily: FONT.mono, whiteSpace: "nowrap", minWidth: 60 }}>{n.date}</span>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{n.headline}</div>
-                <div style={{ fontSize: 11, color: T.textDim, marginTop: 2 }}>{n.relevance}</div>
+          {/* Donut chart (CSS-based) */}
+          <div style={card({ width: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" })}>
+            <div style={{ position: "relative", width: 120, height: 120, marginBottom: 12 }}>
+              <svg viewBox="0 0 36 36" style={{ width: 120, height: 120, transform: "rotate(-90deg)" }}>
+                <circle cx="18" cy="18" r="15.5" fill="none" stroke={T.border} strokeWidth="3" />
+                <circle cx="18" cy="18" r="15.5" fill="none" stroke={T.brand} strokeWidth="3"
+                  strokeDasharray={`${companyAvgCitation} ${100 - companyAvgCitation}`} strokeLinecap="round" />
+              </svg>
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: T.brand }}>{companyAvgCitation}%</div>
+                <div style={{ fontSize: 8, fontWeight: 600, color: T.textDim, fontFamily: FONT.mono, letterSpacing: 1 }}>{cName.toUpperCase()} AVG</div>
               </div>
             </div>
-          ))}
+            {/* Top 3 competitors legend */}
+            {competitorMatrix.slice(0, 3).map((comp, i) => {
+              const total = scanLlms.reduce((s, l) => s + (comp[l] || 0), 0);
+              const colors = ["#8b5cf6", "#6366f1", "#10b981"];
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, width: "100%" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: colors[i % colors.length] }} />
+                  <span style={{ fontSize: 10, color: T.text, flex: 1 }}>{comp.name}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: T.textDim, fontFamily: FONT.mono }}>{total > 0 ? `~${total}` : "\u2014"}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Leaderboard insight cards */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 0 }}>
+          {platformInsights.strongest && (() => {
+            const lid = platformInsights.strongest;
+            const rate = citationRates[lid]?.rate || 0;
+            return insightCard(
+              "#f59e0b",
+              `${LLM_LABELS[lid]}: ${cName}'s Strongest Platform`,
+              `${citationRates[lid]?.hits || 0} citations with a ${rate}% mention rate. ${LLM_LABELS[lid]} positions ${cName} as a key player in ${intel.industry || "the market"}.`
+            );
+          })()}
+          {platformInsights.weakest && platformInsights.weakest !== platformInsights.strongest && (() => {
+            const lid = platformInsights.weakest;
+            return insightCard(
+              "#ef4444",
+              `${LLM_LABELS[lid]}: Category-Wide Blackout`,
+              `${LLM_LABELS[lid]} gave generic responses for ${totalScanQs - (citationRates[lid]?.hits || 0)} of ${totalScanQs} questions \u2014 naming almost no ${intel.industry || "industry"} vendors. The entire category is invisible on ${LLM_LABELS[lid]}.`
+            );
+          })()}
+        </div>
+      </>}
+
+      {/* No scan data message */}
+      {!hasScan && (
+        <div style={{ ...card({ textAlign: "center", padding: 32 }), marginTop: 20 }}>
+          <div style={{ fontSize: 13, color: T.textDim }}>AI visibility data will appear here after the perception scan completes.</div>
+          <div style={{ fontSize: 11, color: T.textGhost, marginTop: 4 }}>Run a full research to include AI platform scanning.</div>
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   /* ── Tab: Competitors ── */
   const renderCompetitors = () => (
@@ -1062,7 +1400,7 @@ export default function CompanyIntelligence({ onNavigate }) {
 
       {/* Content */}
       {researchPhase === "idle" || researchPhase === "error" ? renderInputForm() :
-       researchPhase === "researching" || researchPhase === "generating" ? renderProgress() :
+       researchPhase === "researching" || researchPhase === "generating" || researchPhase === "scanning" ? renderProgress() :
        hasResults ? (
         <>
           {renderTabBar()}
