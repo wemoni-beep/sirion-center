@@ -138,7 +138,10 @@ AuthorityRing.jsx was missing `useEffect` in its React import, causing a black s
 ### 7. Questions merge from 4 tiers
 The `questions` useMemo in QuestionGenerator merges: Pipeline -> Static Q_BANK -> KB (IndexedDB) -> AI-generated. Enrichment fields (intentType, personaFit) come from KB tier. If IndexedDB is empty, enrichment data disappears unless pipeline has it.
 
-### 8. Firebase project mismatch on deploy
+### 8. StrictMode destroys PersistenceManager (FIXED)
+React 18 StrictMode mounts→unmounts→remounts. The PM cleanup called `destroy()` (setting `_destroyed = true`) but didn't null the ref, so the remount skipped recreation (`if (!pmRef.current)` was truthy). Fix: null `pmRef.current` in the cleanup so the next render creates a fresh PM instance.
+
+### 9. Firebase project mismatch on deploy
 Dev uses `sirion-persona-stage`. Deploy may use a different project. Check `VITE_FIREBASE_PROJECT_ID` env var in Cloudflare Pages settings.
 
 ---

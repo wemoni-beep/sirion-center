@@ -12,6 +12,7 @@ const AuthorityRing = lazy(() => import("./AuthorityRing"));
 const BuyingStageGuide = lazy(() => import("./BuyingStageGuide"));
 const CLMAdvisor = lazy(() => import("./CLMAdvisor"));
 const StrategyAdvisor = lazy(() => import("./StrategyAdvisor"));
+const CompanyIntelligence = lazy(() => import("./CompanyIntelligence"));
 
 
 /* ═══════════════════════════════════════════════════════
@@ -22,6 +23,7 @@ const StrategyAdvisor = lazy(() => import("./StrategyAdvisor"));
 
 const MODULES = [
   { id: "home", n: "0", label: "Dashboard", icon: "\u25C9", path: "/" },
+  { id: "intel", n: "R", label: "Company Intel", path: "/intel" },
   { id: "m1", n: "1", label: "Question Generator", icon: "\u2753", path: "/questions" },
   { id: "m2", n: "2", label: "Perception Monitor", icon: "\uD83D\uDD2D", path: "/perception" },
   { id: "m3", n: "3", label: "Authority Ring", icon: "\u25CE", path: "/authority" },
@@ -36,24 +38,33 @@ const idToPath = Object.fromEntries(MODULES.map(m => [m.id, m.path]));
 
 function getModuleFromHash() {
   const hash = window.location.hash.replace("#", "") || "/";
-  return pathToId[hash] || "home";
+  if (pathToId[hash]) return pathToId[hash];
+  // Support sub-routes: #/perception/scan -> m2
+  const basePath = "/" + hash.split("/").filter(Boolean)[0];
+  return pathToId[basePath] || "home";
+}
+
+function getSubTabFromHash() {
+  const parts = (window.location.hash.replace("#", "") || "/").split("/").filter(Boolean);
+  return parts.length > 1 ? parts[1] : null;
 }
 
 function useHashRouter() {
   const [active, setActiveState] = useState(getModuleFromHash);
+  const [subTab, setSubTabState] = useState(getSubTabFromHash);
 
   useEffect(() => {
-    const onHash = () => setActiveState(getModuleFromHash());
+    const onHash = () => { setActiveState(getModuleFromHash()); setSubTabState(getSubTabFromHash()); };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const setActive = (id) => {
+  const setActive = (id, sub) => {
     const path = idToPath[id] || "/";
-    window.location.hash = path;
+    window.location.hash = sub ? path + "/" + sub : path;
   };
 
-  return [active, setActive];
+  return [active, setActive, subTab];
 }
 
 const useIsMobile = () => {
@@ -247,8 +258,17 @@ function Dashboard({ t, onNavigate }) {
       })).reverse(); // reversed for vertical layout (highest group on top)
   }, [m3DomainsArr.length]);
 
+  // Intel data
+  const intelData = ps?.intel;
+  const hasIntel = !!intelData?.companyName && intelData?.researchPhase === "complete";
+  const intelQCount = intelData?.questions?.length || 0;
+  const intelPersonaCount = intelData?.buyerPersonas?.length || 0;
+  const intelCompCount = intelData?.competitors?.length || 0;
+  const intelDm = intelData?.demandMap;
+
   // Prioritized actions
   const actions = [];
+  if (!hasIntel) actions.push({ priority: 0, text: "Research your target company to build a demand map with buyer-intent queries", mod: "Intel", action: "intel", icon: "R" });
   if (!m1.hasData) actions.push({ priority: 1, text: "Generate buyer-intent questions to fuel the entire growth engine", mod: "M1", action: "m1", icon: "1" });
   else if (!m2.hasData) actions.push({ priority: 1, text: "Run your first AI perception scan across Claude, Gemini, ChatGPT", mod: "M2", action: "m2", icon: "1" });
   if (m2.hasData && mentionRate < 50) actions.push({ priority: actions.length + 1, text: `Sirion mentioned in only ${mentionRate}% of AI responses — publish targeted content to close gaps`, mod: "M2", action: "m2", icon: String(actions.length + 1) });
@@ -273,6 +293,37 @@ function Dashboard({ t, onNavigate }) {
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+
+      {/* ── INTEL BANNER ── */}
+      {hasIntel && (
+        <div onClick={() => onNavigate("intel")} style={{
+          ...card({ padding: "14px 20px", marginBottom: 14, cursor: "pointer", borderLeft: `3px solid ${t.brand}` }),
+          display: "flex", alignItems: "center", gap: 14, transition: "all 0.2s",
+        }}>
+          <span style={{
+            width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 12, fontWeight: 800, fontFamily: "var(--mono)", background: t.brand, color: "#fff",
+          }}>R</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>
+              {intelData.companyName}
+              <span style={{ fontSize: 11, color: t.textDim, fontWeight: 400, marginLeft: 8 }}>Demand Map Ready</span>
+            </div>
+            <div style={{ fontSize: 11, color: t.textGhost, fontFamily: "var(--mono)", marginTop: 2 }}>
+              {intelCompCount} competitors · {intelPersonaCount} personas · {intelQCount} queries
+              {intelDm && <span> · {intelDm.dimensions?.information || 0} info / {intelDm.dimensions?.competitive || 0} comp / {intelDm.dimensions?.authority || 0} auth</span>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {intelData.researchedAt && (
+              <span style={{ fontSize: 10, color: t.textGhost, fontFamily: "var(--mono)" }}>
+                {fmtTime(intelData.researchedAt)}
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: t.brand, fontWeight: 600, fontFamily: "var(--mono)" }}>View Map</span>
+          </div>
+        </div>
+      )}
 
       {/* ── ROW 1: SCORE CARDS WITH GAUGE ARCS ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
@@ -678,19 +729,27 @@ function Dashboard({ t, onNavigate }) {
 
 /* ── Settings Page ── */
 function SettingsPage({ t }) {
+  const { getDiagnostics, getSaveStatus, persistApiKeys } = usePipeline();
   const [anthropicKey, setAnthropicKey] = useState(localStorage.getItem("xt_anthropic_key") || "");
   const [geminiKey, setGeminiKey] = useState(localStorage.getItem("xt_gemini_key") || "");
   const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("xt_openai_key") || "");
   const [perplexityKey, setPerplexityKey] = useState(localStorage.getItem("xt_perplexity_key") || "");
   const [grokKey, setGrokKey] = useState(localStorage.getItem("xt_grok_key") || "");
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const diag = getDiagnostics();
+  const saveStatus = getSaveStatus();
 
-  const handleSave = () => {
-    if (anthropicKey) localStorage.setItem("xt_anthropic_key", anthropicKey); else localStorage.removeItem("xt_anthropic_key");
-    if (geminiKey) localStorage.setItem("xt_gemini_key", geminiKey); else localStorage.removeItem("xt_gemini_key");
-    if (openaiKey) localStorage.setItem("xt_openai_key", openaiKey); else localStorage.removeItem("xt_openai_key");
-    if (perplexityKey) localStorage.setItem("xt_perplexity_key", perplexityKey); else localStorage.removeItem("xt_perplexity_key");
-    if (grokKey) localStorage.setItem("xt_grok_key", grokKey); else localStorage.removeItem("xt_grok_key");
+  const handleSave = async () => {
+    const keys = { xt_anthropic_key: anthropicKey, xt_gemini_key: geminiKey, xt_openai_key: openaiKey, xt_perplexity_key: perplexityKey, xt_grok_key: grokKey };
+    // 1. localStorage (immediate, browser-local)
+    for (const [k, v] of Object.entries(keys)) {
+      if (v) localStorage.setItem(k, v); else localStorage.removeItem(k);
+    }
+    // 2. Firebase (canonical, durable) — via persistApiKeys on context
+    setSaveError(null);
+    const ok = await persistApiKeys(keys);
+    if (!ok) setSaveError("Saved to localStorage only. Firebase write failed — keys will not persist across browsers.");
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -742,8 +801,11 @@ function SettingsPage({ t }) {
         }}>
           {saved ? "Saved" : "Save API Keys"}
         </button>
+        {saveError && (
+          <div style={{ fontSize: 11, color: "#f87171", marginTop: 8, fontFamily: "var(--mono)" }}>{saveError}</div>
+        )}
         <div style={{ fontSize: 11, color: t.textDim, marginTop: 8 }}>
-          Keys are stored in your browser's localStorage. They never leave your device.
+          Keys are saved to localStorage (immediate) and Firebase (durable, cross-browser).
         </div>
       </div>
 
@@ -756,6 +818,122 @@ function SettingsPage({ t }) {
         </div>
       </div>
 
+      {/* Firebase Warning Banner */}
+      {diag.firebaseDisabled && (
+        <div style={{ background: "#7f1d1d", border: "1px solid #ef4444", borderRadius: 10, padding: "16px 20px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 18 }}>!</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#fca5a5", marginBottom: 4 }}>Firebase Disabled</div>
+            <div style={{ fontSize: 11, color: "#fecaca", lineHeight: 1.5 }}>
+              Data only persists in this browser. Clearing cache or switching browsers will lose all data.
+              Set VITE_FIREBASE_PROJECT_ID at build time to enable durable storage.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* System Status */}
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 24, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>System Status</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Firebase", value: diag.firebaseDisabled ? "Disabled" : "Connected", color: diag.firebaseDisabled ? "#ef4444" : "#34d399" },
+            { label: "Project ID", value: diag.firebase?.projectId || "(none)" },
+            { label: "Data Source", value: diag.dataSource || "unknown" },
+            { label: "Data Version", value: diag.dataVersion || "unknown" },
+            { label: "Pipeline Doc", value: diag.pipelineDocId || "(none)" },
+            { label: "Question Count", value: String(diag.questionCount || 0) },
+            { label: "Firebase Docs Loaded", value: String(diag.firebase?.loadedDocs ?? 0) },
+            { label: "Last Save", value: saveStatus.lastSavedAt ? new Date(saveStatus.lastSavedAt).toLocaleTimeString() : "never" },
+          ].map((item, i) => (
+            <div key={i} style={{ padding: "10px 0" }}>
+              <div style={{ fontSize: 11, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)", marginBottom: 4 }}>{item.label}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: item.color || t.text }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+        {diag.firebase?.loadError && (
+          <div style={{ marginTop: 12, padding: "8px 12px", background: "#7f1d1d20", borderRadius: 6, fontSize: 11, color: "#f87171", fontFamily: "var(--mono)" }}>
+            Firebase error: {diag.firebase.loadError}
+          </div>
+        )}
+      </div>
+
+      {/* API Key Persistence — 3-source breakdown */}
+      {(() => {
+        const ak = diag.apiKeys || {};
+        const lsKeys = ak.localStorage || [];
+        const fbKeys = ak.firebase || [];
+        const envKeys = ak.envFallback || [];
+        const fbDocExists = ak.firebaseDocExists;
+        const envBundled = ak.envBundled;
+        const onlyEnv = envKeys.length > 0 && lsKeys.length === 0 && fbKeys.length === 0;
+        const noCanonical = fbKeys.length === 0 && fbDocExists === false;
+        return (
+          <div style={{ background: t.bgCard, border: `1px solid ${noCanonical ? "#ef4444" : t.border}`, borderRadius: 10, padding: 24, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>API Key Sources</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              {/* Firebase (canonical) */}
+              <div style={{ padding: "12px", background: t.bg, borderRadius: 8, border: `1px solid ${fbKeys.length > 0 ? "#34d39940" : noCanonical ? "#ef444440" : t.border}` }}>
+                <div style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)", marginBottom: 6 }}>Firebase</div>
+                <div style={{ fontSize: 9, color: "#34d399", fontFamily: "var(--mono)", marginBottom: 6 }}>CANONICAL</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: fbKeys.length > 0 ? "#34d399" : "#ef4444" }}>{fbKeys.length} / 5</div>
+                <div style={{ fontSize: 9, color: t.textDim, marginTop: 4 }}>
+                  {fbDocExists === null ? "loading..." : fbDocExists ? "doc exists" : "doc missing (404)"}
+                </div>
+              </div>
+              {/* localStorage (runtime) */}
+              <div style={{ padding: "12px", background: t.bg, borderRadius: 8, border: `1px solid ${lsKeys.length > 0 ? "#fbbf2440" : t.border}` }}>
+                <div style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)", marginBottom: 6 }}>localStorage</div>
+                <div style={{ fontSize: 9, color: "#fbbf24", fontFamily: "var(--mono)", marginBottom: 6 }}>RUNTIME CACHE</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: lsKeys.length > 0 ? "#fbbf24" : t.textDim }}>{lsKeys.length} / 5</div>
+                <div style={{ fontSize: 9, color: t.textDim, marginTop: 4 }}>browser-local only</div>
+              </div>
+              {/* env fallback */}
+              <div style={{ padding: "12px", background: t.bg, borderRadius: 8, border: `1px solid ${envKeys.length > 0 ? "#f9731640" : t.border}` }}>
+                <div style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)", marginBottom: 6 }}>.env Fallback</div>
+                <div style={{ fontSize: 9, color: "#f97316", fontFamily: "var(--mono)", marginBottom: 6 }}>DEV/BUILD ONLY</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: envKeys.length > 0 ? "#f97316" : t.textDim }}>{envKeys.length} / 5</div>
+                <div style={{ fontSize: 9, color: t.textDim, marginTop: 4 }}>baked into JS bundle</div>
+              </div>
+            </div>
+            {/* Warnings */}
+            {noCanonical && (
+              <div style={{ marginTop: 12, padding: "10px 12px", background: "#7f1d1d20", borderRadius: 6, border: "1px solid #ef444430" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5", marginBottom: 2 }}>No canonical key storage</div>
+                <div style={{ fontSize: 10, color: "#fecaca", lineHeight: 1.5 }}>
+                  Firebase doc <span style={{ fontFamily: "var(--mono)" }}>app_config/api_keys</span> does not exist.
+                  Click "Save API Keys" above to create it. Until then, keys exist only in this browser{envKeys.length > 0 ? " (or baked into the build)" : ""}.
+                </div>
+              </div>
+            )}
+            {envKeys.length > 0 && (
+              <div style={{ marginTop: noCanonical ? 8 : 12, padding: "10px 12px", background: "#78350f20", borderRadius: 6, border: "1px solid #f9731630" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#fdba74", marginBottom: 2 }}>
+                  {envBundled ? "VITE_ keys in production bundle" : "VITE_ keys in dev bundle"}
+                </div>
+                <div style={{ fontSize: 10, color: "#fed7aa", lineHeight: 1.5 }}>
+                  {envKeys.length} key{envKeys.length > 1 ? "s" : ""} from <span style={{ fontFamily: "var(--mono)" }}>.env</span> are compiled into the client JavaScript.
+                  {envBundled
+                    ? " Anyone inspecting the deployed site can extract them. Move keys to Firebase via Settings save, then remove from .env for production builds."
+                    : " Acceptable for local development. Remove from .env before production builds to avoid leaking secrets in the client bundle."
+                  }
+                </div>
+              </div>
+            )}
+            {onlyEnv && (
+              <div style={{ marginTop: 8, padding: "10px 12px", background: "#7f1d1d20", borderRadius: 6, border: "1px solid #ef444430" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5", marginBottom: 2 }}>Keys rely entirely on build fallback</div>
+                <div style={{ fontSize: 10, color: "#fecaca", lineHeight: 1.5 }}>
+                  No keys in localStorage or Firebase. The app only works because .env values are baked into the bundle.
+                  This is not canonical persistence — it will break on any deploy without the same .env file.
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Platform Info */}
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 24 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 16 }}>Platform Information</div>
@@ -764,7 +942,7 @@ function SettingsPage({ t }) {
             { label: "Version", value: "1.0.0" },
             { label: "Modules", value: "5 Active" },
             { label: "AI Provider", value: "Claude + Grok (Dual-Engine)" },
-            { label: "Storage", value: "IndexedDB + Firebase" },
+            { label: "Storage", value: diag.firebaseDisabled ? "localStorage only" : "Firebase + localStorage" },
           ].map((item, i) => (
             <div key={i} style={{ padding: "10px 0" }}>
               <div style={{ fontSize: 11, color: t.textDim, textTransform: "uppercase", letterSpacing: 1, fontFamily: "var(--mono)", marginBottom: 4 }}>{item.label}</div>
@@ -836,7 +1014,7 @@ function ModuleArea({ renderContent, t }) {
 /* ── Main App ── */
 export default function App() {
   const [isDark, setIsDark] = useState(true);
-  const [active, setActive] = useHashRouter();
+  const [active, setActive, subTab] = useHashRouter();
   const [sbOpen, setSbOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
   const mob = useIsMobile();
@@ -846,8 +1024,9 @@ export default function App() {
 
   const renderContent = () => {
     switch (active) {
+      case "intel": return <CompanyIntelligence onNavigate={setActive} />;
       case "m1": return <QuestionGenerator onNavigate={setActive} />;
-      case "m2": return <PerceptionMonitor />;
+      case "m2": return <PerceptionMonitor subTab={subTab} />;
       case "m3": return <AuthorityRing />;
       case "m4": return <BuyingStageGuide />;
       case "m5": return <CLMAdvisor />;
